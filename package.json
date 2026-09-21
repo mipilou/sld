@@ -1,0 +1,16 @@
+{
+  "name": "gestiloc-libreville",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "netlify dev",
+    "build": "node scripts/build.mjs"
+  },
+  "dependencies": {
+    "@netlify/database": "latest"
+  },
+  "devDependencies": {
+    "netlify-cli": "latest"
+  }
+}

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0f3d3e">
+  <meta name="description" content="Gestion locative intuitive pour propriétaires à Libreville">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="/styles.css">
+  <title>GestiLoc Libreville</title>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-mark">GL</div>
+        <div><strong>GestiLoc</strong><span>Libreville</span></div>
+      </div>
+      <button class="sidebar-close" id="sidebarClose" aria-label="Fermer le menu">×</button>
+      <nav id="nav">
+        <button class="nav-item active" data-view="dashboard"><span>⌂</span> Vue d'ensemble</button>
+        <div class="nav-group open">
+          <button class="nav-parent"><span>▦</span> Patrimoine <b>⌄</b></button>
+          <div class="nav-children">
+            <button data-view="properties">Propriétés</button>
+            <button data-view="units">Logements</button>
+            <button data-view="tenants">Locataires</button>
+          </div>
+        </div>
+        <div class="nav-group open">
+          <button class="nav-parent"><span>₣</span> Finances <b>⌄</b></button>
+          <div class="nav-children">
+            <button data-view="payments">Paiements</button>
+            <button data-view="invoices">Factures mensuelles</button>
+          </div>
+        </div>
+        <div class="nav-group open">
+          <button class="nav-parent"><span>✓</span> Suivi <b>⌄</b></button>
+          <div class="nav-children">
+            <button data-view="inspections">États des lieux</button>
+            <button data-view="maintenance">Travaux</button>
+          </div>
+        </div>
+        <button class="nav-item" data-view="reports"><span>↗</span> Rapports</button>
+      </nav>
+      <div class="sidebar-foot"><span class="sync-dot"></span><span id="syncLabel">Mode local</span></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="menu-toggle" id="menuToggle" aria-label="Ouvrir le menu">☰</button>
+        <div><p class="eyebrow">Espace propriétaire</p><h1 id="pageTitle">Vue d'ensemble</h1></div>
+        <div class="top-actions">
+          <button class="icon-button" id="syncBtn" title="Synchroniser">↻</button>
+          <button class="owner-chip"><span>YF</span><div><strong>Propriétaire</strong><small>Libreville</small></div></button>
+        </div>
+      </header>
+      <section class="content" id="app"></section>
+    </main>
+  </div>
+  <div class="modal-backdrop" id="modalBackdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-head"><h2 id="modalTitle"></h2><button id="modalClose">×</button></div>
+      <form id="modalForm"><div id="modalBody"></div><div class="modal-actions"><button type="button" class="btn secondary" id="modalCancel">Annuler</button><button class="btn primary" type="submit">Enregistrer</button></div></form>
+    </div>
+  </div>
+  <div class="toast" id="toast" hidden></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
