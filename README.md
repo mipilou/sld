@@ -2,6 +2,8 @@
 
 Application de gestion locative orientée propriétaire, conçue pour Libreville et prête pour GitHub + Netlify.
 
+Au premier lancement, choisissez un code d'accès configuré sur Netlify pour la synchronisation, ou le mode local. L'espace commence vide. Une démonstration peut être chargée depuis **Paramètres**, puis effacée avant de saisir vos propres données.
+
 ## Fonctionnalités incluses
 
 - tableau de bord propriétaire avec encaissements, retards, occupation et travaux ;
@@ -13,7 +15,10 @@ Application de gestion locative orientée propriétaire, conçue pour Libreville
 - rapports de rentabilité et de recouvrement ;
 - navigation responsive avec menus déroulants ;
 - PWA installable et mode local de secours ;
-- synchronisation avec Netlify Database.
+- modification et suppression de chaque élément, quittances de loyer, paramètres, export/import JSON ;
+- accès protégé par code et synchronisation avec détection de conflits (Netlify Database).
+
+Les données locales et les caches des différents codes d'accès restent séparés sur le même navigateur. Le code est conservé pendant la session de l'onglet, puis redemandé lors d'une nouvelle session.
 
 ## Déploiement sur GitHub et Netlify
 
@@ -47,7 +52,14 @@ npm install
 npm run dev
 ```
 
-Sans Netlify CLI ou sans base disponible, l'application continue de fonctionner avec le stockage local du navigateur. Une fois déployée sur Netlify, le bouton de synchronisation enregistre l'état dans Netlify Database.
+Pour vérifier uniquement l'interface en mode local, sans installer Netlify CLI :
+
+```bash
+npm run build
+python3 -m http.server 8080 --directory dist
+```
+
+Ouvrez ensuite `http://localhost:8080`. Sans Netlify CLI ou sans base disponible, l'application fonctionne avec le stockage local du navigateur. Une fois déployée sur Netlify, le bouton de synchronisation enregistre l'état du compte courant dans Netlify Database. La synchronisation serveur ne fonctionne pas avec le simple serveur HTTP local.
 
 ## Structure
 
@@ -65,6 +77,19 @@ gestiloc-libreville/
 └── scripts/build.mjs
 ```
 
-## Important avant mise en production publique
+## Sécurité : code d'accès (obligatoire pour la synchronisation)
 
-Cette version est un MVP mono-propriétaire. Avant d'accueillir plusieurs propriétaires ou des données réelles, ajoutez une authentification et remplacez la clé propriétaire de démonstration par l'identité sécurisée de l'utilisateur côté fonction Netlify.
+Dans Netlify : **Project configuration > Environment variables**, ajoutez `ACCESS_CODES` avec un ou plusieurs codes robustes séparés par des virgules (12 caractères minimum, ex. `Code-Fort-2026!`). Chaque code ouvre un espace de données distinct, donc un propriétaire par code. Sans cette variable, l'application reste en mode local. Conservez vos codes hors du dépôt Git.
+
+Pour transférer des données déjà présentes en mode local vers un espace synchronisé, utilisez **Paramètres > Exporter**, connectez-vous avec le code, puis utilisez **Paramètres > Importer**. Pensez à conserver régulièrement une sauvegarde JSON.
+
+## Installer l'application (PWA)
+
+- **Android / Chrome / Edge / PC** : bouton ⤓ en haut de l'écran, ou menu du navigateur > Installer l'application.
+- **iPhone (Safari)** : Partager > Sur l'écran d'accueil.
+
+Les icônes sont dans `icons/`. Pour les régénérer : `npm run icons` (Python + Pillow).
+
+## Limites connues
+
+Pas de gestion de rôles : un code = un propriétaire complet. L'état est stocké en un JSON par propriétaire, adapté à un portefeuille de petite taille. Il n'y a pas de récupération de code perdue intégrée. Les documents imprimés reprennent les données disponibles au moment de l'impression ; conservez les exportations et les documents définitifs selon vos besoins.
