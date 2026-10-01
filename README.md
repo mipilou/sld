@@ -1,95 +1,47 @@
-# GestiLoc Libreville
+# GestiLoc Libreville — version 4
 
-Application de gestion locative orientée propriétaire, conçue pour Libreville et prête pour GitHub + Netlify.
+Application web installable (PWA) pour gérer un patrimoine locatif. Le compte démarre **sans bien, locataire, paiement ou document fictif**.
 
-Au premier lancement, choisissez un code d'accès configuré sur Netlify pour la synchronisation, ou le mode local. L'espace commence vide. Une démonstration peut être chargée depuis **Paramètres**, puis effacée avant de saisir vos propres données.
+## Fonctionnalités
 
-## Fonctionnalités incluses
+- Connexion e-mail/mot de passe, création de compte, confirmation par e-mail et récupération de mot de passe via Netlify Identity.
+- Données de chaque compte isolées dans Netlify Database. Sauvegarde et import JSON, photos incluses, depuis les paramètres.
+- Menus déroulants, fiches liées pour biens, logements et locataires, recherche dans les listes et tableau de bord.
+- Parcours du locataire : entrée, bail prérempli, loyers, états des lieux d'entrée et de sortie, clôture de location avec conservation de l'historique.
+- Paiements avec montant, mois, date, mode d'encaissement, référence et observations ; reçus et factures imprimables.
+- États des lieux remplis par le propriétaire, grille détaillée, photos prises depuis le téléphone ou ajoutées depuis la galerie, signatures tracées au doigt ou à la souris, finalisation, impression et enregistrement PDF par le navigateur.
+- PWA avec icônes et lancement direct depuis l'écran d'accueil du téléphone.
 
-- tableau de bord propriétaire avec encaissements, retards, occupation et travaux ;
-- propriétés, logements et locataires ;
-- enregistrement des paiements en FCFA ;
-- émission en lot des factures mensuelles et impression ;
-- états des lieux d'entrée et de sortie avec grille, observations et signatures ;
-- suivi des travaux et dépenses ;
-- rapports de rentabilité et de recouvrement ;
-- navigation responsive avec menus déroulants ;
-- PWA installable et mode local de secours ;
-- modification et suppression de chaque élément, quittances de loyer, paramètres, export/import JSON ;
-- accès protégé par code et synchronisation avec détection de conflits (Netlify Database).
+## Mettre en ligne sur Netlify
 
-Les données locales et les caches des différents codes d'accès restent séparés sur le même navigateur. Le code est conservé pendant la session de l'onglet, puis redemandé lors d'une nouvelle session.
+1. Décompressez l'archive dans un dépôt GitHub et importez ce dépôt comme projet Netlify.
+2. Les paramètres de `netlify.toml` exécutent `npm run build`, publient `dist` et déploient les fonctions dans `netlify/functions`.
+3. Dans le projet Netlify, activez **Identity**. Choisissez l'inscription ouverte si les propriétaires créent eux-mêmes leur compte, ou **Invite only** puis invitez les adresses e-mail autorisées. Conservez la confirmation par e-mail activée.
+4. Dans **Data & Storage > Database**, vérifiez que Netlify Database est provisionnée. Les migrations SQL de `netlify/database/migrations` créent la table applicative. En cas de projet ancien sans base, créez-la depuis ce menu et redéployez.
+5. Ouvrez le site en HTTPS. Créez/confirmez le premier compte ou acceptez une invitation, puis saisissez les coordonnées du bailleur dans **Paramètres**.
+6. Vérifiez en déploiement que la création d'une propriété et son enregistrement affichent **Synchronisé**. Testez aussi un état des lieux avec une photo et une signature avant d'utiliser le site pour des dossiers réels.
 
-## Déploiement sur GitHub et Netlify
+`ACCESS_CODES` n'est plus utilisé. Les anciens espaces protégés par code de la v2/v3 ne sont pas automatiquement transférés : si vous y aviez de vraies données, exportez-les depuis l'ancienne application, puis importez ce fichier dans le nouveau compte.
 
-1. Créez un nouveau dépôt GitHub.
-2. Décompressez ce projet puis placez-vous dans son dossier.
-3. Lancez :
-
-```bash
-git init
-git add .
-git commit -m "Première version de GestiLoc Libreville"
-git branch -M main
-git remote add origin URL_DE_VOTRE_DEPOT
-git push -u origin main
-```
-
-4. Dans Netlify, sélectionnez **Add new project > Import an existing project**.
-5. Choisissez GitHub puis le dépôt.
-6. Netlify détectera automatiquement `netlify.toml` :
-   - commande de build : `npm run build` ;
-   - dossier de publication : `dist` ;
-   - fonctions : `netlify/functions`.
-7. Lors du premier déploiement, Netlify détecte la migration dans `netlify/database/migrations` et provisionne la base PostgreSQL.
-
-Si le projet Netlify existe déjà sans base, ouvrez **Data & Storage > Database**, puis créez la base, ou lancez `netlify database init` avec Netlify CLI.
-
-## Développement local
+## Développement
 
 ```bash
-npm install
+npm ci
+npm run build
 npm run dev
 ```
 
-Pour vérifier uniquement l'interface en mode local, sans installer Netlify CLI :
+Le build produit les fichiers statiques dans `dist`. L'authentification Identity et l'accès aux services Netlify doivent être vérifiés sur un déploiement Netlify, y compris un déploiement de prévisualisation. Un simple serveur HTTP local permet de voir l'écran de connexion, mais ne fournit pas l'identité, la base ni les photos.
 
-```bash
-npm run build
-python3 -m http.server 8080 --directory dist
-```
+## Installer sur téléphone
 
-Ouvrez ensuite `http://localhost:8080`. Sans Netlify CLI ou sans base disponible, l'application fonctionne avec le stockage local du navigateur. Une fois déployée sur Netlify, le bouton de synchronisation enregistre l'état du compte courant dans Netlify Database. La synchronisation serveur ne fonctionne pas avec le simple serveur HTTP local.
+- Android avec Chrome/Edge : ouvrez le site HTTPS, puis utilisez **Installer l'application** si proposé ou l'option du menu du navigateur.
+- iPhone avec Safari : **Partager > Sur l'écran d'accueil**.
 
-## Structure
+L'icône ouvre le site directement en mode application. Une connexion Internet reste nécessaire pour accéder aux dossiers et aux photos ; le cache PWA contient seulement l'interface.
 
-```text
-gestiloc-libreville/
-├── index.html
-├── styles.css
-├── app.js
-├── manifest.webmanifest
-├── sw.js
-├── netlify.toml
-├── netlify/
-│   ├── database/migrations/
-│   └── functions/state.mjs
-└── scripts/build.mjs
-```
+## Documents et limites
 
-## Sécurité : code d'accès (obligatoire pour la synchronisation)
+Le bail est un modèle prérempli avec des champs et clauses complémentaires éditables. Relisez-le et adaptez-le aux obligations applicables avant signature. La signature manuscrite tracée dans l'application est conservée avec le constat et apparaît à l'impression ; le produit ne fournit ni horodatage qualifié, ni vérification d'identité, ni service de signature électronique certifiée. L'impression du navigateur permet aussi d'enregistrer un PDF.
 
-Dans Netlify : **Project configuration > Environment variables**, ajoutez `ACCESS_CODES` avec un ou plusieurs codes robustes séparés par des virgules (12 caractères minimum, ex. `Code-Fort-2026!`). Chaque code ouvre un espace de données distinct, donc un propriétaire par code. Sans cette variable, l'application reste en mode local. Conservez vos codes hors du dépôt Git.
-
-Pour transférer des données déjà présentes en mode local vers un espace synchronisé, utilisez **Paramètres > Exporter**, connectez-vous avec le code, puis utilisez **Paramètres > Importer**. Pensez à conserver régulièrement une sauvegarde JSON.
-
-## Installer l'application (PWA)
-
-- **Android / Chrome / Edge / PC** : bouton ⤓ en haut de l'écran, ou menu du navigateur > Installer l'application.
-- **iPhone (Safari)** : Partager > Sur l'écran d'accueil.
-
-Les icônes sont dans `icons/`. Pour les régénérer : `npm run icons` (Python + Pillow).
-
-## Limites connues
-
-Pas de gestion de rôles : un code = un propriétaire complet. L'état est stocké en un JSON par propriétaire, adapté à un portefeuille de petite taille. Il n'y a pas de récupération de code perdue intégrée. Les documents imprimés reprennent les données disponibles au moment de l'impression ; conservez les exportations et les documents définitifs selon vos besoins.
+Les photos sont stockées dans Netlify Blobs (JPEG, PNG ou WebP, 3 Mo maximum par fichier) et servies uniquement après vérification du compte et du dossier. Les autres données sont dans un document JSON par compte dans Netlify Database, avec contrôle de révision. Les exports de sauvegarde intègrent les images dans le fichier JSON, qui peut donc devenir volumineux. Cette architecture convient à un portefeuille de taille modérée. Gardez des exports réguliers de vos dossiers.
