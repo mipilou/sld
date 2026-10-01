@@ -1,4 +1,4 @@
-# GestiLoc Dbz — version 7
+# GestiLoc Dbz — version 8
 
 Application web installable (PWA) pour gérer un patrimoine locatif. Le compte démarre **sans bien, locataire, paiement ou document fictif**.
 
@@ -28,6 +28,20 @@ Application web installable (PWA) pour gérer un patrimoine locatif. Le compte d
 `ACCESS_CODES` n'est plus utilisé. Les anciens espaces protégés par code de la v2/v3 ne sont pas automatiquement transférés : si vous y aviez de vraies données, exportez-les depuis l'ancienne application, puis importez ce fichier dans le nouveau compte.
 
 Les données des versions précédentes restent liées à l'identifiant du même compte Identity après la mise à jour ; utilisez la même adresse et ne supprimez pas l'utilisateur Identity. Remplacez les fichiers du dépôt par le contenu de cette archive, à la racine, puis laissez Netlify redéployer. Il n'y a pas de réinitialisation de la base lors de la mise à jour.
+
+## Révision du loyer et anniversaires
+
+La version 8 calcule une hausse de **5 % à chaque quatrième anniversaire de la date d'entrée** : 4 ans, 8 ans, 12 ans, etc. Chaque hausse s'applique au loyer issu de la précédente, avec arrondi au franc CFA. Les charges restent inchangées.
+
+Le dossier locataire conserve son **loyer mensuel initial hors charges**, distinct du loyer de départ proposé pour les futures locations du logement. La fiche affiche le montant en vigueur, la prochaine hausse et sa date. Si la hausse tombe en cours de mois, le loyer du mois est calculé au prorata des jours avant et après l'anniversaire. Ce calcul est conservé dans la facture et détaillé à l'impression. Une facture déjà émise conserve son montant, même après une correction du loyer initial.
+
+**Dossiers des anciennes versions :** le montant du logement est repris une seule fois comme loyer initial. La fiche le signale comme à vérifier. S'il avait déjà été augmenté, ouvrez **Locataire > Modifier**, renseignez le montant réellement convenu à l'entrée, puis enregistrez. La date d'entrée reste le point de départ des anniversaires. Les factures et versements enregistrés ne sont pas réécrits.
+
+Les nouvelles locations créées ou importées prennent le montant du logement comme loyer initial. Pour une location importée ayant déjà plusieurs années, renseignez donc le montant initial dans le modèle ou corrigez-le ensuite dans la fiche locataire. Les anciens modèles Excel restent compatibles.
+
+Une notification cliquable signale **2 ans, 4 ans, 6 ans de location, etc.** Elle ouvre le dossier et disparaît après consultation. Si l'application n'était pas ouverte le jour anniversaire, le dernier palier atteint est présenté à la prochaine ouverture. La notification suivante possède sa propre référence et réapparaît au prochain palier de deux ans. Aucune nouvelle notification d'anniversaire n'est créée pour une location clôturée. Le calcul s'actualise aussi lorsque l'application reste ouverte après minuit.
+
+Le contrat généré présente le loyer initial à l'article 15 et cette règle de révision à l'article 20. Le champ libre des conditions particulières reste disponible.
 
 ## Nouveautés et utilisation
 

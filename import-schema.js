@@ -1,3 +1,4 @@
+import {captureRentBases, initialRent, RENT_POLICY_LABEL} from "./rent-policy.js";
 export const importSchemas = [
   {sheet:"Proprietes",kind:"properties",label:"Propriétés",columns:["Code propriété","Nom","Type","Quartier","Adresse","Référence cadastrale","Couleur"],required:["Code propriété","Nom","Type","Quartier"]},
   {sheet:"Logements",kind:"units",label:"Logements",columns:["Code logement","Code propriété","Nom","Type","Loyer FCFA","Charges FCFA","Statut","Localisation","Description"],required:["Code logement","Code propriété","Nom","Type","Loyer FCFA","Statut"]},
@@ -18,6 +19,7 @@ const str = v => v == null ? "" : String(v).trim();
 const code = record => record.importCode || record.id;
 export function prepareImport(sheets,source,makeId=()=>crypto.randomUUID()) {
   const payload=structuredClone(source),errors=[],changes=[],statusChecks=[];
+  captureRentBases(payload);
   const seenSheets=new Set();
   const fail = (where,message) => { throw Error(`${where} : ${message}`); };
   const choose=(value,list,where,optional=false)=>{
@@ -83,6 +85,7 @@ export function prepareImport(sheets,source,makeId=()=>crypto.randomUUID()) {
           if(end<start)fail(at,"fin du bail antérieure à l’entrée");if(due>31)fail(at,"jour d’échéance entre 1 et 31");
           const email=str(get("Email"));if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))fail(at,"email invalide");
           Object.assign(record,{unitId:u.id,name:str(get("Nom")),phone:str(get("Téléphone")),email,start,leaseEnd:end,deposit:amount(get("Dépôt FCFA"),at,0,true),dueDay:due,identityNumber:str(get("Pièce identité")),postalAddress:str(get("Adresse")),leaseNotes:str(get("Conditions bail"))});
+          if(!existing){record.initialRent=initialRent(null,u);record.rentBaseSource="excel-unit";record.rentReview=RENT_POLICY_LABEL;}
           u.tenantId=record.id;u.status="occupied";
         }
         if(["payments","invoices"].includes(schema.kind)){

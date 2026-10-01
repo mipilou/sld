@@ -1,4 +1,5 @@
 // Structure des 24 articles du contrat remis par le propriétaire.
+import {initialRent, anniversary} from "./rent-policy.js";
 // Les conditions juridiques restent à relire et à adapter avant toute signature.
 const esc=value=>String(value??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 const value=input=>input===null||input===undefined||String(input).trim()===""?"À compléter":esc(input);
@@ -8,12 +9,13 @@ const amount=input=>input!==null&&input!==undefined&&String(input).trim()!==""?n
 const article=(n,title,body)=>`<section class="lease-article"><h3>ARTICLE ${n} : ${esc(title)}</h3>${body}</section>`;
 
 export function leaseHTML({tenant:t,unit:u,property:p={},settings:s={},entry}) {
+  const startingRent=initialRent(t,u);
   const address=[p.address||p.district,s.city].filter(Boolean).join(", ");
   const required=[
     ["nom du bailleur",s.ownerName],["adresse du bailleur",s.address],
     ["nom du preneur",t.name],["adresse du bien",address],
     ["description du logement",u.description],["date de prise d’effet",t.start],
-    ["date de fin",t.leaseEnd],["loyer mensuel",u.rent]
+    ["date de fin",t.leaseEnd],["loyer mensuel initial",startingRent]
   ].filter(([,v])=>v===null||v===undefined||String(v).trim()==="").map(([name])=>name);
   const intro=`<div class="lease-intro"><p><strong>Entre les soussignés</strong></p>
     <p><strong>Le BAILLEUR :</strong> ${value(s.ownerName)}${s.company?` (${esc(s.company)})`:""}<br>Adresse / boîte postale : ${value(s.address)} · Téléphone : ${value(s.phone)} · Courriel : ${value(s.email)}</p>
@@ -34,12 +36,12 @@ export function leaseHTML({tenant:t,unit:u,property:p={},settings:s={},entry}) {
     article(12,"RÉSILIATION À L’AMIABLE",`<p>Les parties peuvent mettre fin au contrat d’un commun accord écrit, en précisant la date de départ, la remise des clés, l’état des lieux de sortie et le règlement des comptes.</p>`),
     article(13,"CESSION DES BIENS LOUÉS AVEC FIN DU BAIL",`<p>En cas de projet de vente ou de cession accompagné d’une demande de fin du bail, les parties appliquent les règles de notification, de préavis et les droits éventuels du preneur prévus par les textes applicables.</p>`),
     article(14,"CESSION DES BIENS LOUÉS SANS FIN DU BAIL",`<p>Si la propriété change de titulaire sans mettre fin à la location, le preneur est informé des coordonnées du nouveau bailleur et de la continuité ou des modifications autorisées du contrat.</p>`),
-    article(15,"LOYER ET CAUTION",`<p>Loyer mensuel convenu : <strong>${amount(u.rent)}</strong>, payable le ${value(t.dueDay)} de chaque mois par ${value(t.leasePaymentMethod)}. Les parties distinguent le loyer, les charges et le dépôt de garantie détaillé à l’article 17.</p>`),
+    article(15,"LOYER ET CAUTION",`<p>Loyer mensuel initial à la prise d’effet, hors charges : <strong>${amount(startingRent)}</strong>, payable le ${value(t.dueDay)} de chaque mois par ${value(t.leasePaymentMethod)}. Son évolution est décrite à l’article 20. Les parties distinguent le loyer, les charges et le dépôt de garantie détaillé à l’article 17.</p>`),
     article(16,"CHARGES LOCATIVES ET CHARGES DIVERSES",`<p>Charges mensuelles convenues : <strong>${amount(u.charges)}</strong>. Les abonnements, consommations d’eau, d’électricité et autres services sont réglés selon les contrats et justificatifs correspondants. Leur répartition détaillée peut être précisée dans les conditions particulières.</p>`),
     article(17,"DÉPÔT DE GARANTIE",`<p>Dépôt de garantie convenu à l’entrée : <strong>${amount(t.deposit)}</strong>. Sa restitution et les éventuelles retenues sont établies sur la base du constat de sortie, des comptes et des justificatifs, conformément aux règles applicables. Aucun autre dépôt n’est présumé par ce modèle.</p>`),
     article(18,"CESSION DU BAIL ET SOUS-LOCATION",`<p>Une cession du bail ou une sous-location nécessite un accord préalable écrit du bailleur et le respect des conditions applicables. Les modalités particulières sont consignées par écrit.</p>`),
     article(19,"OBLIGATIONS DES PARTIES",`<p><strong>Preneur :</strong> occuper paisiblement les lieux selon leur destination, entretenir les équipements confiés, signaler les incidents et restituer les lieux et accès à la sortie, sous réserve de l’usure normale et des responsabilités légalement applicables.</p><p><strong>Bailleur :</strong> délivrer le logement convenu, permettre sa jouissance paisible et prendre en charge les obligations qui lui incombent, notamment les réparations ne relevant pas de l’entretien locatif.</p>`),
-    article(20,"AUGMENTATION DU LOYER",`<p>Modalité de révision retenue : ${value(t.rentReview)}. Toute modification du montant est soumise à l’accord des parties et aux règles en vigueur.</p>`),
+    article(20,"AUGMENTATION DU LOYER",`<p>Le loyer hors charges est majoré de <strong>5 % tous les 4 ans</strong>, à la date anniversaire de la prise d’effet du bail. La première révision intervient le <strong>${date(anniversary(t.start,4))}</strong>, puis aux 8e, 12e anniversaires et ainsi de suite pendant la location. Chaque hausse porte sur le montant mensuel issu de la révision précédente et est arrondie au franc CFA.</p><p>Lorsque l’anniversaire intervient en cours de mois, le loyer de ce mois est réparti au prorata des jours avant et à partir de la révision. Les charges ne sont pas majorées par ce calcul. Cette modalité est à relire et à accepter par les parties avant signature, dans le respect des règles applicables.</p>`),
     article(21,"RÉSILIATION MOTIVÉE",`<p>En cas d’inexécution d’une obligation, la partie concernée peut agir dans les formes et délais prévus par les textes applicables. Les motifs, les notifications et les possibilités de régularisation doivent être examinés avant toute résiliation.</p>`),
     article(22,"RÉSILIATION JUDICIAIRE",`<p>Tout différend non résolu à l’amiable peut être soumis à la juridiction compétente selon les règles de procédure applicables.</p>`),
     article(23,"FRAIS ET DROITS D’ENREGISTREMENT",`<p>Répartition convenue des frais et droits : ${value(t.feesResponsibility)}. Les formalités obligatoires sont accomplies dans les conditions applicables.</p>`),
