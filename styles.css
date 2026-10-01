@@ -24,3 +24,18 @@
 button:disabled{opacity:.55;cursor:not-allowed}
 @media(max-width:800px){.detail-grid{grid-template-columns:1fr}.inspection-line{grid-template-columns:1fr 120px}.inspection-line input{grid-column:1/-1}.signature-grid{grid-template-columns:1fr}.quick-row{align-items:flex-start;flex-direction:column;gap:4px}}
 @media print{.detail-grid{grid-template-columns:repeat(2,1fr)}.link-button{text-decoration:none;color:inherit}.photo-grid img{max-height:150px}}
+.notification-button{position:relative;font-size:19px}
+.notification-button span{position:absolute;right:-6px;top:-8px;background:#ba3d36;color:#fff;border-radius:20px;padding:2px 5px;font:800 10px/1.2 system-ui;min-width:18px}
+.notification-button span[hidden]{display:none}
+.notifications-panel{position:fixed;z-index:25;right:32px;top:78px;width:min(390px,calc(100vw - 24px));max-height:min(560px,75vh);overflow-y:auto;background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 55px rgba(8,30,30,.2);padding:16px}
+.notifications-panel[hidden]{display:none}
+.notifications-panel h3{margin:0 0 12px}
+.notification-row{display:grid;width:100%;gap:4px;text-align:left;background:#f8faf9;border:0;border-radius:10px;padding:12px;margin:7px 0;cursor:pointer}
+.notification-row:hover{background:#e9f2ef}.notification-row strong{color:#a35015;font-size:13px}.notification-row span{font-size:12px;color:var(--ink)}
+.inspection-line{grid-template-columns:minmax(190px,2fr) minmax(120px,.8fr) minmax(180px,1.5fr)}
+.inspection-line:has(small){grid-template-columns:minmax(190px,2fr) minmax(85px,.7fr) minmax(120px,.8fr) minmax(180px,1.5fr)}
+.inspection-line small{color:var(--muted)}.modal:has(.inspection-checklist){width:min(1050px,100%)}
+.inspection-section{margin:18px 0 2px;padding:9px 12px;background:#e8f2f0;border-radius:8px;font-size:14px}
+@media(max-width:800px){.logout-top{padding:8px;font-size:11px}.notifications-panel{top:70px;right:12px}.inspection-line,.inspection-line:has(small){grid-template-columns:1fr 1fr}.inspection-line strong,.inspection-line input{grid-column:1/-1}}
+@media(max-width:520px){.owner-chip{display:none}.topbar .top-actions{gap:4px}.topbar .icon-button{width:34px;height:34px}.logout-top{padding:7px;font-size:10px}}
+@media print{.notifications-panel,.notification-button,.logout-top{display:none!important}}

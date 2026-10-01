@@ -16,6 +16,7 @@ function matches(bytes, mime) {
 export default async (request) => {
   const user = await getUser();
   if (!user?.id) return json({ error: "Connexion requise" }, 401);
+  if (!Array.isArray(user.roles) || !user.roles.includes("admin")) return json({ error: "Accès réservé au propriétaire administrateur" }, 403);
   const url = new URL(request.url);
   const inspectionId = url.searchParams.get("inspection");
   const photoId = url.searchParams.get("id");
@@ -25,6 +26,7 @@ export default async (request) => {
     const [row] = await db.sql`SELECT payload FROM app_state WHERE owner_key = ${user.id}`;
     const inspection = row?.payload?.inspections?.find((i) => i.id === inspectionId);
     if (!inspection) return json({ error: "État des lieux introuvable" }, 404);
+    if (inspection.finalizedAt && (request.method === "POST" || request.method === "DELETE")) return json({ error: "Constat signé : photos verrouillées" }, 409);
     const store = getStore({ name: "gestiloc-photos", consistency: "strong" });
     if (request.method === "POST") {
       verifyRequestOrigin(request);

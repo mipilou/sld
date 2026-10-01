@@ -8,6 +8,7 @@ const collections = ["properties", "units", "tenants", "payments", "invoices", "
 export default async (request) => {
   const user = await getUser();
   if (!user?.id) return out({ error: "Connexion requise" }, 401);
+  if (!Array.isArray(user.roles) || !user.roles.includes("admin")) return out({ error: "Accès réservé au propriétaire administrateur" }, 403);
 
   try {
     const db = getDatabase();
