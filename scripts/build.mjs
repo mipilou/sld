@@ -8,4 +8,5 @@ for (const file of ["index.html", "styles.css", "manifest.webmanifest", "sw.js"]
 }
 await build({entryPoints:["app.js"],outfile:"dist/app.js",bundle:true,platform:"browser",format:"esm",target:"es2022",minify:true});
 await cp("icons", "dist/icons", { recursive: true });
+await cp("imports", "dist/imports", { recursive: true });
 console.log("Build terminé : dist/");

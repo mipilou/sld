@@ -1,3 +1,4 @@
+import { observationText } from "./inspection-observations.js";
 // Modèles dérivés des documents remis par le propriétaire. Les données viennent des fiches du dossier.
 export const inspectionSections = [
   {title:"État général et accès", items:["Porte d’entrée et bâti","Serrure / verrou","Poignée","Jeux de clés et badges","Murs","Plafond","Sol et plinthes","Prises électriques","Interrupteurs","Point lumineux / douille","Fenêtres, vitrages et volets","Propreté générale"]},
@@ -61,7 +62,7 @@ export function inspectionHTML({inspection,tenant,unit,property,settings,entry,p
   for(const item of i.items||[]){const group=item.section||"Autres éléments";if(!grouped.has(group))grouped.set(group,[]);grouped.get(group).push(item);}
   const rows=[...grouped].map(([section,items])=>`<h3>${esc(section)}</h3><table class="inspection-table"><thead><tr><th>Élément</th>${exiting?"<th>Entrée</th>":""}<th>${exiting?"Sortie":"État"}</th><th>Observations / anomalies</th></tr></thead><tbody>${items.map(x=>{
     const previous=baseline?.items?.find(e=>e.section===x.section&&e.item===x.item);
-    return `<tr><td>${esc(x.item)}</td>${exiting?`<td>${previous?text(previous.state):"Sans constat"}</td>`:""}<td>${text(x.state)}</td><td>${esc(x.note||"—")}${exiting&&previous?.note?`<br><small>Entrée : ${esc(previous.note)}</small>`:""}</td></tr>`;
+    return `<tr><td>${esc(x.item)}</td>${exiting?`<td>${previous?text(previous.state):"Sans constat"}</td>`:""}<td>${text(x.state)}</td><td>${esc(observationText(x)||"—")}${exiting&&observationText(previous)?`<br><small>Entrée : ${esc(observationText(previous))}</small>`:""}</td></tr>`;
   }).join("")}</tbody></table>`).join("");
   const photoMarkup=(i.photos||[]).map(photo=>`<figure><img class="photo" src="${photoUrl(i.id,photo.id)}" alt="Photo de constat"><figcaption>${esc(photo.caption||"")}</figcaption></figure>`).join("");
   const legacy=exiting?(baseline?.items||[]).filter(item=>!item.section||item.section==="Autres éléments"):[];

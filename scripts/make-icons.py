@@ -13,7 +13,7 @@ def icon(size, full_bleed, badge):
     d.rounded_rectangle([x, x, x + b, x + b], radius=int(b * .26), fill=GOLD)
     try: f = ImageFont.truetype(FONT, int(b * .52))
     except OSError: f = ImageFont.load_default()
-    d.text((S / 2, S / 2), "GL", font=f, fill=INK, anchor="mm")
+    d.text((S / 2, S / 2), "GD", font=f, fill=INK, anchor="mm")
     return im.resize((size, size), Image.LANCZOS)
 
 icon(192, False, .62).save("icons/icon-192.png")

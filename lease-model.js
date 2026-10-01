@@ -49,6 +49,8 @@ export function leaseHTML({tenant:t,unit:u,property:p={},settings:s={},entry}) {
     <p class="document-note">Contrat préparé à partir du modèle remis par le propriétaire. Les dispositions et montants doivent être relus par les parties avant signature.</p>
     ${intro}${sections.join("")}
     <h3>CONDITIONS PARTICULIÈRES ET ANNEXES</h3><p>${para(t.leaseNotes)}</p><p>${para(s.leaseClauses)}</p><p>Annexes à joindre selon le dossier : état des lieux d’entrée, relevés, liste des accès et photographies.</p>
+    <h3>COMPLÉMENTS MANUELS CONVENUS ENTRE LES PARTIES</h3><p>${t.leaseManual?para(t.leaseManual):"Éléments à compléter à la main avant signature :"}</p>
+    ${Array.from({length:Math.min(12,Math.max(2,Number(t.manualLines)||5))},()=>'<div style="height:26px;border-bottom:1px dotted #899c9b;break-inside:avoid"></div>').join("")}
     <p>Fait à ${value(s.city)}, le ____________________, en ______ exemplaires.</p>
     <div class="signatures"><div><strong>LE BAILLEUR</strong><br>${value(s.ownerName)}<br><br>_______________________</div><div><strong>LE PRENEUR</strong><br>${value(t.name)}<br><br>_______________________</div></div>`;
 }

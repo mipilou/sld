@@ -1,6 +1,6 @@
 {
-  "name": "gestiloc-libreville",
-  "version": "6.0.0",
+  "name": "gestiloc-dbz",
+  "version": "7.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,7 +12,8 @@
     "@netlify/blobs": "^11.1.3",
     "@netlify/database": "2.0.1",
     "@netlify/identity": "^2.0.0",
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "read-excel-file": "9.3.10"
   },
   "devDependencies": {
     "netlify-cli": "27.10.2"

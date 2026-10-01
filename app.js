@@ -1,6 +1,11 @@
 import { getUser, login, signup, logout, handleAuthCallback, requestPasswordRecovery, acceptInvite, updateUser, getSettings } from "@netlify/identity";
 import { inspectionItemsForUnit, roomTypes, roomEquipment, roomSummary, leaseHTML, inspectionHTML } from "./document-templates.js";
 
+import { observationOptions, observationText } from "./inspection-observations.js";
+import { deletionPlan } from "./cascade.js";
+import { prepareImport, importSchemas } from "./import-schema.js";
+import readExcelFile from "read-excel-file/browser";
+
 const $ = (selector) => document.querySelector(selector);
 const h = (value = "") => String(value ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 const money = (value) => new Intl.NumberFormat("fr-FR", { style:"currency", currency:"XAF", maximumFractionDigits:0 }).format(Number(value) || 0);
@@ -16,9 +21,9 @@ const normalize = (raw) => {
   return base;
 };
 let state = emptyState(), rev = 0, currentView = "dashboard", selected = null, user = null;
-let showArchived = false;
+let showArchived = false, currentFilter = "";
 let dirty = false, currentFlush = null, syncTimer = null, authMode = "login", inviteToken = null, allowSignup = true;
-const titles = {dashboard:"Vue d'ensemble",properties:"Propriétés",units:"Logements",tenants:"Locataires",leases:"Contrats de bail",payments:"Paiements",invoices:"Factures mensuelles",inspections:"États des lieux",maintenance:"Travaux",reports:"Rapports",settings:"Paramètres"};
+const titles = {dashboard:"Vue d'ensemble",properties:"Propriétés",units:"Logements",tenants:"Locataires",leases:"Contrats de bail",payments:"Paiements",invoices:"Factures mensuelles",inspections:"États des lieux",maintenance:"Travaux",reports:"Rapports",settings:"Paramètres",imports:"Imports Excel"};
 const property = (key) => state.properties.find(x => x.id === key);
 const unit = (key) => state.units.find(x => x.id === key);
 const tenant = (key) => state.tenants.find(x => x.id === key);
@@ -36,7 +41,7 @@ function portfolioSnapshot() {
   limit.setDate(limit.getDate()+90);
   const endLimit=limit.toLocaleDateString("sv-SE");
   const due=occupied.map(u=>({u,t:tenant(u.tenantId)})).filter(x=>x.t&&x.t.start?.slice(0,7)<=month)
-    .map(x=>({...x,rent:Number(x.u.rent||0),received:paid(x.t.id,month)}));
+    .map(x=>({...x,rent:Number(state.invoices.find(i=>i.tenantId===x.t.id&&i.month===month)?.amount??x.u.rent??0),received:paid(x.t.id,month)}));
   const remaining=due.map(x=>({...x,balance:Math.max(0,x.rent-x.received)})).filter(x=>x.balance>0);
   const pastDue=state.invoices.filter(i=>i.month<month).map(i=>({...i,balance:Math.max(0,Number(i.amount||0)-paid(i.tenantId,i.month))})).filter(i=>i.balance>0);
   const leases=state.tenants.filter(t=>!t.end&&t.leaseEnd&&t.leaseEnd<=endLimit).sort((a,b)=>a.leaseEnd.localeCompare(b.leaseEnd));
@@ -45,8 +50,8 @@ function portfolioSnapshot() {
   const byMethod=Object.entries(monthPayments.reduce((out,p)=>{const key=p.method||"Non renseigné";out[key]=(out[key]||0)+Number(p.amount||0);return out;},{})).sort((a,b)=>b[1]-a[1]);
   return {liveUnits,occupied,missingTenant,due,remaining,pastDue,leases,missingEntry,byMethod,received:monthPayments.reduce((n,p)=>n+Number(p.amount||0),0),expected:due.reduce((n,x)=>n+x.rent,0)};
 }
-const badge = (value) => `<span class="status ${/payé|occupé|terminé|signé|actif/i.test(value)?"good":/retard|impayé|urgent/i.test(value)?"bad":/partiel|travaux|cours|signalé|brouillon|à payer/i.test(value)?"warn":"info"}">${h(value)}</span>`;
-const linked = (kind, key, label) => `<button class="link-button" type="button" data-open="${kind}" data-id="${h(key)}">${h(label || "—")}</button>`;
+const badge = (value) => `<span class="status ${/retard|impayé|urgent/i.test(value)?"bad":/payé|occupé|terminé|signé|actif/i.test(value)?"good":/partiel|travaux|cours|signalé|brouillon|à payer/i.test(value)?"warn":"info"}">${h(value)}</span>`;
+const linked = (kind, key, label) => `<button class="link-button" type="button" data-open="${kind}" data-id="${h(key)}">${kind==="properties"?`<i class="property-dot" style="background:${propertyColor(property(key))}"></i>`:""}${h(label || "—")}</button>`;
 const shell = (title, subtitle, actions = "", body = "") => `<div class="hero"><div><h2>${h(title)}</h2><p>${h(subtitle)}</p></div><div class="actions">${actions}</div></div>${body}`;
 const empty = (message) => `<div class="card empty-state"><strong>${h(message)}</strong><p>Utilisez le bouton ci-dessus pour commencer.</p></div>`;
 const actions = (kind, key, allowDelete = true) => isAdmin() ? `<button class="btn small secondary" data-action="edit" data-kind="${kind}" data-id="${h(key)}">Modifier</button>${allowDelete?`<button class="btn small danger" data-action="delete" data-kind="${kind}" data-id="${h(key)}">Supprimer</button>`:""}` : "";
@@ -151,17 +156,19 @@ $("#signupBtn").onclick = () => setAuthMode("signup");
 $("#recoverBtn").onclick = () => setAuthMode("recover");
 $("#backLoginBtn").onclick = () => setAuthMode("login");
 
-function navigate(view, key = null) { currentView = view; selected = key; $("#notificationsPanel").hidden=true; $("#notificationsBtn").setAttribute("aria-expanded","false"); render(); activateNav(); $("#sidebar").classList.remove("open"); window.scrollTo(0,0); }
+function navigate(view, key = null, filter = "") { currentView = view; selected = key; currentFilter = filter; $("#helpPanel").hidden=true; $("#helpBtn").setAttribute("aria-expanded","false"); $("#notificationsPanel").hidden=true; $("#notificationsBtn").setAttribute("aria-expanded","false"); render(); activateNav(); $("#sidebar").classList.remove("open"); window.scrollTo(0,0); }
 function activateNav() { document.querySelectorAll("[data-view]").forEach(button => button.classList.toggle("active",button.dataset.view === currentView)); }
 function render() {
   $("#pageTitle").textContent = titles[currentView];
-  const pages = { dashboard, properties, units, tenants, leases, payments, invoices, inspections, maintenance, reports, settings:settingsView };
+  const pages = { dashboard, properties, units, tenants, leases, payments, invoices, inspections, maintenance, reports, settings:settingsView,imports:importsView };
   $("#app").innerHTML = selected ? detail(currentView,selected) : pages[currentView]();
+  if(currentFilter)$("#app").insertAdjacentHTML("afterbegin",`<div class="filter-banner">${h(filterLabels[currentFilter]||currentFilter)} <button class="link-button" data-view="${currentView}">Afficher tout</button></div>`);
   updateChip();
   renderNotifications();
   $("#searchInput")?.addEventListener("input",event => { const term = event.target.value.toLowerCase(); document.querySelectorAll("[data-search]").forEach(row => row.hidden = !row.dataset.search.toLowerCase().includes(term)); });
   $("#settingsForm")?.addEventListener("submit",event => { event.preventDefault(); state.settings = { ...state.settings, ...Object.fromEntries(new FormData(event.target)) }; persist(); toast("Paramètres enregistrés"); });
   $("#importFile")?.addEventListener("change",importData);
+  $("#excelFile")?.addEventListener("change",previewExcelImport);
   $("#photoFiles")?.addEventListener("change",uploadPhotos);
   $("#cameraFile")?.addEventListener("change",uploadPhotos);
 }
@@ -175,8 +182,8 @@ function notifications() {
   for(const x of due){
     const balance=Math.max(0,x.rent-x.received);if(!balance)continue;
     const lastDay=new Date(Number(todayDate.slice(0,4)),Number(todayDate.slice(5,7)),0).getDate();
-    const dueDate=`${monthKey()}-${String(Math.min(Math.max(1,Number(x.t.dueDay)||1),lastDay)).padStart(2,"0")}`;
-    if(dueDate<todayDate)alerts.push({kind:"Retard de paiement",message:`${x.t.name} · ${money(balance)} du mois en cours à percevoir`,view:"tenants",id:x.t.id});
+    const dueDate=state.invoices.find(i=>i.tenantId===x.t.id&&i.month===monthKey())?.dueDate||`${monthKey()}-${String(Math.min(Math.max(1,Number(x.t.dueDay)||1),lastDay)).padStart(2,"0")}`;
+    if(dueDate<todayDate)alerts.push({kind:"Retard de paiement",message:`${x.t.name} · ${money(balance)} pour ${monthKey()} à percevoir`,view:"tenants",id:x.t.id});
     else if(dueDate<=soonDate)alerts.push({kind:"Loyer à venir",message:`${x.t.name} · échéance le ${dateFr(dueDate)} (${money(balance)})`,view:"tenants",id:x.t.id});
   }
   for(const invoice of pastDue)alerts.push({kind:"Loyer antérieur impayé",message:`${tenant(invoice.tenantId)?.name||"Locataire"} · ${invoice.month} · ${money(invoice.balance)} restant`,view:"tenants",id:invoice.tenantId});
@@ -184,34 +191,34 @@ function notifications() {
   for(const t of leases.filter(t=>t.leaseEnd<=leaseSoonDate))alerts.push({kind:t.leaseEnd<todayDate?"Bail arrivé à échéance":"Bail à échéance",message:`${t.name} · fin prévue le ${dateFr(t.leaseEnd)}`,view:"tenants",id:t.id});
   for(const t of missingEntry.filter(t=>t.start<=todayDate))alerts.push({kind:"Constat d’entrée à finaliser",message:`${t.name} · état d’entrée non signé`,view:"tenants",id:t.id});
   for(const i of state.inspections.filter(i=>i.type==="Sortie"&&!i.finalizedAt))alerts.push({kind:"Sortie à finaliser",message:`${tenant(i.tenantId)?.name||"Locataire"} · constat en brouillon`,view:"inspections",id:i.id});
-  for(const m of state.maintenance.filter(m=>m.priority==="Urgente"&&m.status!=="Terminé"))alerts.push({kind:"Travaux urgents",message:`${m.title} · ${unit(m.unitId)?.name||"Logement"}`,view:"maintenance"});
-  return alerts;
+  for(const m of state.maintenance.filter(m=>m.priority==="Urgente"&&m.status!=="Terminé"))alerts.push({kind:"Travaux urgents",message:`${m.title} · ${unit(m.unitId)?.name||"Logement"}`,view:"maintenance",id:m.id});
+  return alerts.map(x=>({...x,key:JSON.stringify([x.kind,x.view,x.id||"",x.message])})).filter(x=>!(state.settings.readNotifications||[]).includes(x.key));
 }
 function renderNotifications() {
   const list=notifications();
   $("#notificationsCount").hidden=!list.length;
   $("#notificationsCount").textContent=list.length>99?"99+":String(list.length);
   $("#notificationsBtn").setAttribute("aria-label",`Notifications (${list.length})`);
-  $("#notificationsPanel").innerHTML=`<h3>À suivre · ${list.length}</h3>${list.length?list.map(x=>`<button type="button" class="notification-row" data-open="${h(x.view)}" ${x.id?`data-id="${h(x.id)}"`:""}><strong>${h(x.kind)}</strong><span>${h(x.message)}</span></button>`).join(""):'<p class="muted">Aucun événement à signaler actuellement.</p>'}`;
+  $("#notificationsPanel").innerHTML=`<h3>À suivre · ${list.length}</h3>${list.length?list.map(x=>`<button type="button" class="notification-row" data-notification="${h(x.key)}" data-open="${h(x.view)}" ${x.id?`data-id="${h(x.id)}"`:""}><strong>${h(x.kind)}</strong><span>${h(x.message)}</span></button>`).join(""):'<p class="muted">Aucun événement à signaler actuellement.</p>'}`;
 }
 function table(headers, rows) { return `<div class="card table-card"><div class="toolbar"><div class="search"><span>⌕</span><input id="searchInput" aria-label="Rechercher" placeholder="Rechercher dans la liste"></div><span class="card-sub">${rows.length} élément(s)</span></div><div class="table-wrap"><table><thead><tr>${headers.map(x=>`<th>${h(x)}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr data-search="${h(r.search)}">${r.cells.map(x=>`<td>${x}</td>`).join("")}</tr>`).join("")||`<tr><td class="empty" colspan="${headers.length}">Aucune donnée pour le moment.</td></tr>`}</tbody></table></div></div>`; }
 function dashboard() {
   const {liveUnits,occupied,missingTenant,expected:due,received,remaining:late,leases,missingEntry}=portfolioSnapshot();
   return shell("Votre patrimoine",`Situation au ${dateFr(today())}`,`<button class="btn primary" data-view="properties">+ Ajouter une propriété</button>`,`<div class="kpi-grid">
-    <div class="kpi"><p>Logements occupés</p><strong>${occupied.length}/${liveUnits.length}</strong><small>${liveUnits.length?Math.round(occupied.length/liveUnits.length*100):0}% d'occupation</small></div>
-    <div class="kpi"><p>Encaissements du mois</p><strong>${money(received)}</strong><small>Sur ${money(due)} attendus</small></div>
-    <div class="kpi danger"><p>Reste à percevoir</p><strong>${money(late.reduce((n,x)=>n+x.balance,0))}</strong><small>${late.length} dossier(s) à suivre</small></div>
-    <div class="kpi warning"><p>Travaux ouverts</p><strong>${state.maintenance.filter(m=>m.status!=="Terminé").length}</strong></div>
-  </div><div class="grid-2"><div class="card"><h3>Locataires et loyers du mois</h3>${late.length?late.map(x=>`<div class="quick-row">${linked("tenants",x.t?.id,x.t?.name)}<span>${money(x.balance)} à percevoir</span></div>`).join(""):`<p class="muted">${occupied.length?"Aucun solde à percevoir.":"Ajoutez un logement et un locataire pour commencer."}</p>`}</div><div class="card"><h3>Points à suivre</h3><p>${leases.length} bail(s) expiré(s) ou à échéance sous 90 jours</p><p>${missingTenant.length} logement(s) indiqué(s) occupé(s) sans bail</p><p>${missingEntry.length} état(s) d'entrée non signé(s)</p><p>${state.inspections.filter(i=>!i.finalizedAt).length} constat(s) en brouillon</p><div class="quick-actions"><button class="btn secondary" data-view="reports">Ouvrir la vue globale</button><button class="btn secondary" data-action="payment-add">+ Paiement</button></div></div></div>`);
+    <button class="kpi" data-view="units" data-filter="occupied"><p>Logements occupés</p><strong>${occupied.length}/${liveUnits.length}</strong><small>${liveUnits.length?Math.round(occupied.length/liveUnits.length*100):0}% d'occupation</small></button>
+    <button class="kpi" data-view="payments" data-filter="month"><p>Encaissements du mois</p><strong>${money(received)}</strong><small>Sur ${money(due)} attendus</small></button>
+    <button class="kpi danger" data-view="tenants" data-filter="remaining"><p>Reste à percevoir</p><strong>${money(late.reduce((n,x)=>n+x.balance,0))}</strong><small>${late.length} dossier(s) à suivre</small></button>
+    <button class="kpi warning" data-view="maintenance" data-filter="open"><p>Travaux ouverts</p><strong>${state.maintenance.filter(m=>m.status!=="Terminé").length}</strong></button>
+  </div><div class="grid-2"><div class="card"><h3>Locataires et loyers du mois</h3>${late.length?late.map(x=>`<div class="quick-row">${linked("tenants",x.t?.id,x.t?.name)}<span>${money(x.balance)} à percevoir</span></div>`).join(""):`<p class="muted">${occupied.length?"Aucun solde à percevoir.":"Ajoutez un logement et un locataire pour commencer."}</p>`}</div><div class="card"><h3>Points à suivre</h3><div class="followup-links"><button data-view="leases" data-filter="expiring">${leases.length} bail(s) expiré(s) ou à échéance sous 90 jours <span>→</span></button><button data-view="units" data-filter="missingTenant">${missingTenant.length} logement(s) occupé(s) sans bail <span>→</span></button><button data-view="inspections" data-filter="missingEntry">${missingEntry.length} état(s) d’entrée non signé(s) <span>→</span></button><button data-view="inspections" data-filter="drafts">${state.inspections.filter(i=>!i.finalizedAt).length} constat(s) en brouillon <span>→</span></button></div><div class="quick-actions"><button class="btn secondary" data-view="reports">Ouvrir la vue globale</button><button class="btn secondary" data-action="payment-add">+ Paiement</button></div></div></div>`);
 }
-function properties() { const list=state.properties.filter(p=>!p.archived||showArchived);return shell("Propriétés","Vos biens immobiliers et leurs logements.",`<button class="btn primary" data-action="property-add">+ Propriété</button>${state.properties.some(p=>p.archived)?`<button class="btn secondary" data-action="property-archives">${showArchived?"Masquer les archives":"Voir les archives"}</button>`:""}`,list.length?`<div class="property-grid">${list.map(p=>{const units=state.units.filter(u=>u.propertyId===p.id),occ=units.filter(u=>u.status==="occupied");return `<article class="property-card"><div class="property-cover"><span>${h(p.type)} ${p.archived?"· Archivé":""}</span>${badge(`${occ.length}/${units.length} occupés`)}</div><div class="property-card-body"><h3>${linked("properties",p.id,p.name)}</h3><p>📍 ${h(p.address||p.district||state.settings.city)}</p><div class="property-stats"><div><strong>${units.length}</strong><span>Logements</span></div><div><strong>${occ.length}</strong><span>Occupés</span></div><div><strong>${units.length-occ.length}</strong><span>Non occupés</span></div></div><p class="card-amount">${money(occ.reduce((n,u)=>n+Number(u.rent),0))} / mois</p>${actions("properties",p.id,!p.archived)}${p.archived?`<button class="btn small secondary" data-action="property-restore" data-id="${h(p.id)}">Restaurer</button>`:""}</div></article>`}).join("")}</div>`:empty("Aucune propriété enregistrée")); }
-function units() { return shell("Logements","Cliquez sur un nom pour ouvrir le dossier.",`<button class="btn primary" data-action="unit-add">+ Logement</button>`,table(["Logement","Propriété","Type","Loyer","Statut","Locataire",""],state.units.filter(u=>!property(u.propertyId)?.archived).map(u=>({search:`${u.name} ${property(u.propertyId)?.name} ${tenant(u.tenantId)?.name}`,cells:[linked("units",u.id,u.name),linked("properties",u.propertyId,property(u.propertyId)?.name),h(u.type),money(u.rent),badge(u.status==="occupied"?"Occupé":u.status==="works"?"En travaux":"Vacant"),u.tenantId?linked("tenants",u.tenantId,tenant(u.tenantId)?.name):"—",actions("units",u.id)]})))); }
-function tenants() { return shell("Locataires","Du bail d'entrée à la sortie du logement.",`<button class="btn primary" data-action="tenant-add">+ Locataire</button>`,table(["Locataire","Téléphone","Logement","Entrée","Sortie","Situation",""],state.tenants.map(t=>({search:`${t.name} ${t.phone} ${unit(t.unitId)?.name}`,cells:[linked("tenants",t.id,t.name),h(t.phone),linked("units",t.unitId,unit(t.unitId)?.name),dateFr(t.start),dateFr(t.end),badge(t.end?"Sorti":paid(t.id)>=Number(unit(t.unitId)?.rent||0)?"Payé":paid(t.id)>0?"Partiel":"À suivre"),actions("tenants",t.id,false)]})))); }
-function leases() { return shell("Contrats de bail","Contrats préremplis à partir des dossiers locataires.","",table(["Locataire","Logement","Entrée","Fin prévue","Loyer","Contrat"],state.tenants.map(t=>({search:`${t.name} ${unit(t.unitId)?.name}`,cells:[linked("tenants",t.id,t.name),linked("units",t.unitId,unit(t.unitId)?.name),dateFr(t.start),dateFr(t.leaseEnd),money(unit(t.unitId)?.rent),`<button class="btn small secondary" data-action="lease-print" data-id="${h(t.id)}">Afficher / imprimer</button>`]})))); }
-function payments() { return shell("Paiements","Historique des règlements avec leur mode et référence.",`<button class="btn primary" data-action="payment-add">+ Paiement</button>`,table(["Date","Locataire","Logement","Période","Montant","Mode / référence",""],[...state.payments].sort((a,b)=>b.date.localeCompare(a.date)).map(p=>({search:`${tenant(p.tenantId)?.name} ${p.method} ${p.reference||""}`,cells:[dateFr(p.date),linked("tenants",p.tenantId,tenant(p.tenantId)?.name),linked("units",p.unitId,unit(p.unitId)?.name),h(p.month),money(p.amount),`${h(p.method)}${p.reference?`<br><small>${h(p.reference)}</small>`:""}`,`<button class="btn small secondary" data-action="receipt-print" data-id="${h(p.id)}">Reçu</button>${actions("payments",p.id)}`]})))); }
-function invoices() { return shell("Factures mensuelles","Émettez une facture par logement occupé et par mois.",`<button class="btn primary" data-action="invoice-run">Émettre ce mois</button>`,table(["N°","Locataire","Logement","Période","Montant","Statut",""],state.invoices.map(i=>({search:`${i.number} ${tenant(i.tenantId)?.name}`,cells:[h(i.number),linked("tenants",i.tenantId,tenant(i.tenantId)?.name),linked("units",i.unitId,unit(i.unitId)?.name),h(i.month),money(i.amount),badge(paid(i.tenantId,i.month)>=i.amount?"Payée":"À payer"),`<button class="btn small secondary" data-action="invoice-print" data-id="${h(i.id)}">Imprimer</button>`]})))); }
-function inspections() { return shell("États des lieux","Constats d'entrée et de sortie avec photos et signatures.",`<button class="btn primary" data-action="inspection-add" data-type="Entrée">+ Entrée</button><button class="btn secondary" data-action="inspection-add" data-type="Sortie">+ Sortie</button>`,table(["Date","Type","Locataire","Logement","Statut",""],state.inspections.map(i=>({search:`${tenant(i.tenantId)?.name} ${unit(i.unitId)?.name} ${i.type}`,cells:[dateFr(i.date),h(i.type),linked("tenants",i.tenantId,tenant(i.tenantId)?.name),linked("units",i.unitId,unit(i.unitId)?.name),badge(i.finalizedAt?"Signé":"Brouillon"),`<button class="btn small secondary" data-open="inspections" data-id="${h(i.id)}">Ouvrir</button>`]})))); }
-function maintenance() { return shell("Travaux","Incidents, interventions et dépenses.",`<button class="btn primary" data-action="maintenance-add">+ Intervention</button>`,table(["Intervention","Logement","Priorité","Coût","Statut",""],state.maintenance.map(m=>({search:`${m.title} ${unit(m.unitId)?.name}`,cells:[h(m.title),linked("units",m.unitId,unit(m.unitId)?.name),badge(m.priority),money(m.cost),badge(m.status),actions("maintenance",m.id)]})))); }
+function properties() { const list=state.properties.filter(p=>!p.archived||showArchived);return shell("Propriétés","Vos biens immobiliers et leurs logements.",`<button class="btn primary" data-action="property-add">+ Propriété</button>${state.properties.some(p=>p.archived)?`<button class="btn secondary" data-action="property-archives">${showArchived?"Masquer les archives":"Voir les archives"}</button>`:""}`,list.length?`<div class="property-grid">${list.map(p=>{const units=state.units.filter(u=>u.propertyId===p.id),occ=units.filter(u=>u.status==="occupied");return `<article class="property-card" style="border-top:5px solid ${propertyColor(p)}"><div class="property-cover" style="background:${propertyColor(p)}">${p.photo?`<img src="${propertyPhotoUrl(p)}" alt="${h(p.name)}" loading="lazy">`:""}<span>${h(p.type)} ${p.archived?"· Archivé":""}</span>${badge(`${occ.length}/${units.length} occupés`)}</div><div class="property-card-body"><h3>${linked("properties",p.id,p.name)}</h3><p>📍 ${h(p.address||p.district||state.settings.city)}</p><div class="property-stats"><div><strong>${units.length}</strong><span>Logements</span></div><div><strong>${occ.length}</strong><span>Occupés</span></div><div><strong>${units.length-occ.length}</strong><span>Non occupés</span></div></div><p class="card-amount">${money(occ.reduce((n,u)=>n+Number(u.rent),0))} / mois</p>${actions("properties",p.id)}${p.archived?`<button class="btn small secondary" data-action="property-restore" data-id="${h(p.id)}">Restaurer</button>`:""}</div></article>`}).join("")}</div>`:empty("Aucune propriété enregistrée")); }
+function units() { return shell("Logements","Cliquez sur un nom pour ouvrir le dossier.",`<button class="btn primary" data-action="unit-add">+ Logement</button>`,table(["Logement","Propriété","Type","Loyer","Statut","Locataire",""],filteredRecords("units").filter(u=>!property(u.propertyId)?.archived).map(u=>({search:`${u.name} ${property(u.propertyId)?.name} ${tenant(u.tenantId)?.name}`,cells:[linked("units",u.id,u.name),linked("properties",u.propertyId,property(u.propertyId)?.name),h(u.type),money(u.rent),badge(u.status==="occupied"?"Occupé":u.status==="works"?"En travaux":"Vacant"),u.tenantId?linked("tenants",u.tenantId,tenant(u.tenantId)?.name):"—",actions("units",u.id)]})))); }
+function tenants() { return shell("Locataires","Du bail d'entrée à la sortie du logement.",`<button class="btn primary" data-action="tenant-add">+ Locataire</button>`,table(["Locataire","Téléphone","Logement","Entrée","Sortie","Situation",""],filteredRecords("tenants").map(t=>({search:`${t.name} ${t.phone} ${unit(t.unitId)?.name}`,cells:[linked("tenants",t.id,t.name),h(t.phone),linked("units",t.unitId,unit(t.unitId)?.name),dateFr(t.start),dateFr(t.end),badge(t.end?"Sorti":paid(t.id)>=Number(unit(t.unitId)?.rent||0)?"Payé":paid(t.id)>0?"Partiel":"À suivre"),actions("tenants",t.id,false)]})))); }
+function leases() { return shell("Contrats de bail","Contrats préremplis à partir des dossiers locataires.","",table(["Locataire","Logement","Entrée","Fin prévue","Loyer","Contrat"],filteredRecords("tenants").map(t=>({search:`${t.name} ${unit(t.unitId)?.name}`,cells:[linked("tenants",t.id,t.name),linked("units",t.unitId,unit(t.unitId)?.name),dateFr(t.start),dateFr(t.leaseEnd),money(unit(t.unitId)?.rent),`<button class="btn small secondary" data-action="lease-print" data-id="${h(t.id)}">Afficher / imprimer</button><button class="btn small secondary" data-action="lease-complete" data-id="${h(t.id)}">Compléter le bail</button>`]})))); }
+function payments() { return shell("Paiements","Historique des règlements avec leur mode et référence.",`<button class="btn primary" data-action="payment-add">+ Paiement</button>`,table(["Date","Locataire","Logement","Période","Montant","Mode / référence",""],[...filteredRecords("payments")].sort((a,b)=>b.date.localeCompare(a.date)).map(p=>({search:`${tenant(p.tenantId)?.name} ${p.method} ${p.reference||""}`,cells:[dateFr(p.date),linked("tenants",p.tenantId,tenant(p.tenantId)?.name),linked("units",p.unitId,unit(p.unitId)?.name),h(p.month),money(p.amount),`${h(p.method)}${p.reference?`<br><small>${h(p.reference)}</small>`:""}`,`<button class="btn small secondary" data-action="receipt-print" data-id="${h(p.id)}">Reçu</button>${actions("payments",p.id)}`]})))); }
+function invoices() { return shell("Factures mensuelles","Émettez une facture par logement occupé et par mois.",`<button class="btn primary" data-action="invoice-run">Émettre ce mois</button>`,table(["N°","Locataire","Logement","Période","Montant","Statut",""],state.invoices.map(i=>({search:`${i.number} ${tenant(i.tenantId)?.name}`,cells:[h(i.number),linked("tenants",i.tenantId,tenant(i.tenantId)?.name),linked("units",i.unitId,unit(i.unitId)?.name),h(i.month),money(i.amount),badge(paid(i.tenantId,i.month)>=i.amount?"Payée":paid(i.tenantId,i.month)>0?"Partielle":`${i.month<monthKey()?"En retard":"À payer"}`),`<button class="btn small secondary" data-action="invoice-print" data-id="${h(i.id)}">Imprimer</button>${forceButton("invoices",i.id)}`]})))); }
+function inspections() { if(currentFilter==="missingEntry")return missingEntryView(); return shell("États des lieux","Constats d'entrée et de sortie avec photos et signatures.",`<button class="btn primary" data-action="inspection-add" data-type="Entrée">+ Entrée</button><button class="btn secondary" data-action="inspection-add" data-type="Sortie">+ Sortie</button>`,table(["Date","Type","Locataire","Logement","Statut",""],filteredRecords("inspections").map(i=>({search:`${tenant(i.tenantId)?.name} ${unit(i.unitId)?.name} ${i.type}`,cells:[dateFr(i.date),h(i.type),linked("tenants",i.tenantId,tenant(i.tenantId)?.name),linked("units",i.unitId,unit(i.unitId)?.name),badge(i.finalizedAt?"Signé":"Brouillon"),`<button class="btn small secondary" data-open="inspections" data-id="${h(i.id)}">Ouvrir</button>`]})))); }
+function maintenance() { return shell("Travaux","Incidents, interventions et dépenses.",`<button class="btn primary" data-action="maintenance-add">+ Intervention</button>`,table(["Intervention","Logement","Priorité","Coût","Statut",""],filteredRecords("maintenance").map(m=>({search:`${m.title} ${unit(m.unitId)?.name}`,cells:[linked("maintenance",m.id,m.title),linked("units",m.unitId,unit(m.unitId)?.name),badge(m.priority),money(m.cost),badge(m.status),actions("maintenance",m.id)]})))); }
 function donut(title,parts,center,format=value=>String(value)) {
   const colors=["#176a61","#e9b949","#739ca8","#b76a5b","#8b77a0","#6d8a50"];
   const values=parts.map(([label,value])=>[label,Math.max(0,Number(value)||0)]),total=values.reduce((n,[,value])=>n+value,0);
@@ -243,39 +250,40 @@ function reports() {
   <div class="grid-2 spaced"><div class="card"><h3>États d'entrée à signer</h3>${snap.missingEntry.length?snap.missingEntry.map(t=>`<div class="quick-row">${linked("tenants",t.id,t.name)}<span>${dateFr(t.start)}</span></div>`).join(""):'<p class="muted">Aucun dossier à signaler.</p>'}</div><div class="card"><h3>Travaux ouverts</h3>${openWorks.length?openWorks.map(m=>`<div class="quick-row"><span>${h(m.title)} · ${linked("units",m.unitId,unit(m.unitId)?.name)}</span>${badge(m.status)}</div>`).join(""):'<p class="muted">Aucun travail ouvert.</p>'}</div></div>
   <div class="card spaced"><h3>Situation par propriété</h3>${table(["Propriété","Logements","Occupés","Loyers théoriques mensuels"],state.properties.filter(p=>!p.archived).map(p=>{const all=snap.liveUnits.filter(u=>u.propertyId===p.id),occ=all.filter(u=>u.status==="occupied");return {search:p.name,cells:[linked("properties",p.id,p.name),String(all.length),String(occ.length),money(occ.reduce((n,u)=>n+Number(u.rent||0),0))]}}))}</div>`);
 }
-function settingsView() { const s=state.settings; return shell("Paramètres","Coordonnées du bailleur, documents et sauvegardes.","",`<div class="card"><form id="settingsForm">${fields([{name:"ownerName",label:"Nom du propriétaire",required:true},{name:"company",label:"Société ou gestionnaire"},{name:"phone",label:"Téléphone"},{name:"email",label:"E-mail de contact",type:"email"},{name:"address",label:"Adresse et boîte postale du bailleur",full:true},{name:"city",label:"Ville"},{name:"leaseClauses",label:"Clauses complémentaires du bail (à relire avant signature)",type:"textarea",full:true}],s)}<button class="btn primary" type="submit">Enregistrer</button></form></div><div class="card spaced"><h3>Compte et données</h3><p class="muted">Compte connecté : ${h(user?.email)} · Rôle : ${isAdmin()?"administrateur":"lecture seule"}. Chaque compte conserve son espace de données distinct dans Netlify.</p><div class="actions"><button class="btn secondary" data-action="export">Exporter JSON</button><label class="btn secondary file-label">Importer JSON<input type="file" id="importFile" accept="application/json" hidden></label><button class="btn secondary" data-action="logout">Se déconnecter</button></div></div><div class="card spaced"><h3>Installer sur téléphone</h3><p>Android : menu Chrome ou Edge → Installer l’application. iPhone : Safari → Partager → Sur l’écran d’accueil.</p></div>`); }
+function settingsView() { const s=state.settings; return shell("Paramètres","Coordonnées du bailleur, documents et sauvegardes.","",`<div class="card"><form id="settingsForm">${fields([{name:"ownerName",label:"Nom du propriétaire",required:true},{name:"company",label:"Société ou gestionnaire"},{name:"phone",label:"Téléphone"},{name:"email",label:"E-mail de contact",type:"email"},{name:"address",label:"Adresse et boîte postale du bailleur",full:true},{name:"city",label:"Ville"},{name:"leaseClauses",label:"Clauses complémentaires du bail (à relire avant signature)",type:"textarea",full:true}],s)}<button class="btn primary" type="submit">Enregistrer</button></form></div><div class="card spaced"><h3>Compte et données</h3><p class="muted">Compte connecté : ${h(user?.email)} · Rôle : ${isAdmin()?"administrateur":"lecture seule"}. Chaque compte conserve son espace de données distinct dans Netlify.</p><div class="actions"><button class="btn secondary" data-action="export">Exporter JSON</button><label class="btn secondary file-label">Importer JSON<input type="file" id="importFile" accept="application/json" hidden></label><button class="btn secondary" data-action="logout">Se déconnecter</button></div></div><div class="card spaced"><h3>Installer sur téléphone</h3><p>Retrouvez GestiLoc Dbz depuis une icône sur l’écran d’accueil.</p><button class="btn primary" data-action="install">Installer l’application sur mon téléphone</button></div>`); }
 
 function detail(view,key) {
+  if (view === "maintenance") return maintenanceDetail(state.maintenance.find(x=>x.id===key));
   if (view === "properties") return propertyDetail(property(key));
   if (view === "units") return unitDetail(unit(key));
   if (view === "tenants") return tenantDetail(tenant(key));
   if (view === "inspections") return inspectionDetail(state.inspections.find(i=>i.id===key));
-  return ( {dashboard, properties, units, tenants, leases, payments, invoices, inspections, maintenance, reports, settings:settingsView}[view] )();
+  return ( {dashboard, properties, units, tenants, leases, payments, invoices, inspections, maintenance, reports, settings:settingsView,imports:importsView}[view] )();
 }
 const back = (view) => `<button class="btn secondary" data-view="${view}">← Retour à la liste</button>`;
 function propertyDetail(p) {
   if (!p) return empty("Propriété introuvable");
   const unitsHere=state.units.filter(u=>u.propertyId===p.id);
-  return shell(p.name,`${p.address||p.district||""} · ${p.type}`,`${back("properties")}<button class="btn secondary" data-action="edit" data-kind="properties" data-id="${h(p.id)}">Modifier</button>${p.archived?`<button class="btn primary" data-action="property-restore" data-id="${h(p.id)}">Restaurer</button>`:`<button class="btn primary" data-action="unit-add" data-property="${h(p.id)}">+ Logement</button><button class="btn danger" data-action="delete" data-kind="properties" data-id="${h(p.id)}">Supprimer / archiver</button>`}`,`<div class="card"><h3>Fiche du bien</h3><p>${h(p.address||"Adresse non renseignée")}</p><p>Quartier : ${h(p.district||"—")}</p><p>Parcelle / référence cadastrale : ${h(p.cadastral||"—")}</p></div><div class="card spaced"><h3>Logements (${unitsHere.length})</h3>${unitsHere.length?unitsHere.map(u=>`<div class="quick-row">${linked("units",u.id,u.name)}<span>${money(u.rent)} · ${badge(u.status==="occupied"?"Occupé":u.status==="works"?"En travaux":"Vacant")}</span></div>`).join(""):`<p class="muted">Aucun logement dans ce bien.</p>`}</div>`);
+  return shell(p.name,`${p.address||p.district||""} · ${p.type}`,`${back("properties")}<button class="btn secondary" data-action="edit" data-kind="properties" data-id="${h(p.id)}">Modifier</button>${p.archived?`<button class="btn primary" data-action="property-restore" data-id="${h(p.id)}">Restaurer</button>${forceButton("properties",p.id)}`:`<button class="btn primary" data-action="unit-add" data-property="${h(p.id)}">+ Logement</button><button class="btn danger" data-action="delete" data-kind="properties" data-id="${h(p.id)}">Supprimer / archiver</button>`}`,`<div class="card property-profile" style="border-top:5px solid ${propertyColor(p)}">${p.photo?`<img class="property-profile-photo" src="${propertyPhotoUrl(p)}" alt="${h(p.name)}"><button class="btn small secondary" data-action="property-photo-delete" data-id="${h(p.id)}">Retirer la photo</button>`:""}<h3>Fiche du bien</h3><p>Code d’import : <code>${h(p.importCode||p.id)}</code></p><p>${h(p.address||"Adresse non renseignée")}</p><p>Quartier : ${h(p.district||"—")}</p><p>Parcelle / référence cadastrale : ${h(p.cadastral||"—")}</p></div><div class="card spaced"><h3>Logements (${unitsHere.length})</h3>${unitsHere.length?unitsHere.map(u=>`<div class="quick-row">${linked("units",u.id,u.name)}<span>${money(u.rent)} · ${badge(u.status==="occupied"?"Occupé":u.status==="works"?"En travaux":"Vacant")}</span></div>`).join(""):`<p class="muted">Aucun logement dans ce bien.</p>`}</div>`);
 }
 function unitDetail(u) {
   if (!u) return empty("Logement introuvable");
   const t=tenant(u.tenantId), history=state.tenants.filter(x=>x.unitId===u.id);
-  return shell(u.name,`${property(u.propertyId)?.name||"Propriété"} · ${money(u.rent)} / mois`,`${back("units")}<button class="btn secondary" data-action="edit" data-kind="units" data-id="${h(u.id)}">Modifier</button>`,`<div class="workflow"><span class="done">1 · Logement créé</span><span class="${t?"done":"current"}">2 · Locataire et bail</span><span class="${t?"current":""}">3 · État des lieux d'entrée</span></div><div class="detail-grid"><div class="card"><h3>Logement</h3><p>Propriété : ${linked("properties",u.propertyId,property(u.propertyId)?.name)}</p><p>Type : ${h(u.type)}</p><p>Loyer : ${money(u.rent)} · Charges : ${money(u.charges)}</p><p>Statut : ${badge(u.status==="occupied"?"Occupé":u.status==="works"?"En travaux":"Vacant")}</p><p><strong>Composition :</strong> ${h(u.description||"À renseigner")}</p></div><div class="card"><h3>${t?"Bail en cours":"Étape suivante · créer le bail"}</h3>${t?`<p>Locataire : ${linked("tenants",t.id,t.name)}</p><p>Entrée : ${dateFr(t.start)}</p><button class="btn primary" data-action="lease-print" data-id="${h(t.id)}">Voir le contrat prérempli</button>`:`<p class="muted">Saisissez l'identité du locataire et les dates. Le contrat reprendra automatiquement la description, l'adresse et le loyer de ce logement.</p><button class="btn primary" data-action="tenant-add" data-unit="${h(u.id)}">Continuer : locataire et bail →</button>`}</div></div><div class="card spaced"><h3>Historique des occupants</h3>${history.length?history.map(x=>`<div class="quick-row">${linked("tenants",x.id,x.name)}<span>${dateFr(x.start)} → ${dateFr(x.end)}</span></div>`).join(""):`<p class="muted">Aucun occupant enregistré.</p>`}</div>`);
+  return shell(u.name,`${property(u.propertyId)?.name||"Propriété"} · ${money(u.rent)} / mois`,`${back("units")}${forceButton("units",u.id)}<button class="btn secondary" data-action="edit" data-kind="units" data-id="${h(u.id)}">Modifier</button>`,`<div class="workflow"><span class="done">1 · Logement créé</span><span class="${t?"done":"current"}">2 · Locataire et bail</span><span class="${t?"current":""}">3 · État des lieux d'entrée</span></div><div class="detail-grid"><div class="card"><h3>Logement</h3><p>Propriété : ${linked("properties",u.propertyId,property(u.propertyId)?.name)}</p><p>Type : ${h(u.type)}</p><p>Loyer : ${money(u.rent)} · Charges : ${money(u.charges)}</p><p>Statut : ${badge(u.status==="occupied"?"Occupé":u.status==="works"?"En travaux":"Vacant")}</p><p><strong>Composition :</strong> ${h(u.description||"À renseigner")}</p></div><div class="card"><h3>${t?"Bail en cours":"Étape suivante · créer le bail"}</h3>${t?`<p>Locataire : ${linked("tenants",t.id,t.name)}</p><p>Entrée : ${dateFr(t.start)}</p><button class="btn primary" data-action="lease-print" data-id="${h(t.id)}">Voir le contrat prérempli</button>`:`<p class="muted">Saisissez l'identité du locataire et les dates. Le contrat reprendra automatiquement la description, l'adresse et le loyer de ce logement.</p><button class="btn primary" data-action="tenant-add" data-unit="${h(u.id)}">Continuer : locataire et bail →</button>`}</div></div><div class="card spaced"><h3>Historique des occupants</h3>${history.length?history.map(x=>`<div class="quick-row">${linked("tenants",x.id,x.name)}<span>${dateFr(x.start)} → ${dateFr(x.end)}</span></div>`).join(""):`<p class="muted">Aucun occupant enregistré.</p>`}</div>`);
 }
 function tenantDetail(t) {
   if (!t) return empty("Locataire introuvable");
   const u=unit(t.unitId), p=property(u?.propertyId), paymentsHere=state.payments.filter(x=>x.tenantId===t.id).sort((a,b)=>b.date.localeCompare(a.date)), inspectionsHere=state.inspections.filter(x=>x.tenantId===t.id).sort((a,b)=>a.date.localeCompare(b.date));
   const entry=inspectionsHere.find(i=>i.type==="Entrée"), exit=inspectionsHere.find(i=>i.type==="Sortie");
-  return shell(t.name,`${t.end?"Location clôturée":"Location en cours"} · ${u?.name||"Logement supprimé"}`,`${back("tenants")}<button class="btn secondary" data-action="edit" data-kind="tenants" data-id="${h(t.id)}">Modifier</button>`,`<div class="detail-grid"><div class="card"><h3>Coordonnées et bail</h3><p>Téléphone : <a href="tel:${h(t.phone)}">${h(t.phone)}</a></p><p>E-mail : ${t.email?`<a href="mailto:${h(t.email)}">${h(t.email)}</a>`:"—"}</p><p>Pièce d'identité : ${h(t.identityNumber||"—")}</p><p>Logement : ${linked("units",t.unitId,u?.name)}</p><p>Bien : ${linked("properties",p?.id,p?.name)}</p><p>Entrée : ${dateFr(t.start)} · Fin prévue : ${dateFr(t.leaseEnd)}</p><p>Loyer : ${money(u?.rent)} · Charges : ${money(u?.charges)} · Dépôt : ${money(t.deposit)}</p><p>Échéance : le ${h(t.dueDay||1)} de chaque mois</p><button class="btn primary" data-action="lease-print" data-id="${h(t.id)}">Contrat de bail prérempli</button></div><div class="card"><h3>Parcours du locataire</h3><ol class="journey"><li>${badge("Entrée")} ${dateFr(t.start)}</li><li>${entry?linked("inspections",entry.id,"État des lieux d'entrée"):!t.end?`<button class="link-button" data-action="inspection-add" data-tenant="${h(t.id)}" data-type="Entrée">Créer l'état des lieux d'entrée</button>`:"État d'entrée non enregistré"}</li><li>${paymentsHere.length} paiement(s) enregistrés</li><li>${exit?linked("inspections",exit.id,"État des lieux de sortie"):!t.end?`<button class="link-button" data-action="inspection-add" data-tenant="${h(t.id)}" data-type="Sortie">Créer l'état des lieux de sortie</button>`:"État de sortie non enregistré"}</li><li>${t.end?`Sortie le ${dateFr(t.end)}`:exit?.finalizedAt?`<button class="btn small danger" data-action="tenant-close" data-id="${h(t.id)}">Clôturer la location</button>`:"Sortie à réaliser"}</li></ol></div></div>
+  return shell(t.name,`${t.end?"Location clôturée":"Location en cours"} · ${u?.name||"Logement supprimé"}`,`${back("tenants")}${forceButton("tenants",t.id)}<button class="btn secondary" data-action="edit" data-kind="tenants" data-id="${h(t.id)}">Modifier</button>`,`<div class="detail-grid"><div class="card"><h3>Coordonnées et bail</h3><p>Téléphone : <a href="tel:${h(t.phone)}">${h(t.phone)}</a></p><p>E-mail : ${t.email?`<a href="mailto:${h(t.email)}">${h(t.email)}</a>`:"—"}</p><p>Pièce d'identité : ${h(t.identityNumber||"—")}</p><p>Logement : ${linked("units",t.unitId,u?.name)}</p><p>Bien : ${linked("properties",p?.id,p?.name)}</p><p>Entrée : ${dateFr(t.start)} · Fin prévue : ${dateFr(t.leaseEnd)}</p><p>Loyer : ${money(u?.rent)} · Charges : ${money(u?.charges)} · Dépôt : ${money(t.deposit)}</p><p>Échéance : le ${h(t.dueDay||1)} de chaque mois</p><button class="btn primary" data-action="lease-print" data-id="${h(t.id)}">Contrat de bail prérempli</button><button class="btn secondary" data-action="lease-complete" data-id="${h(t.id)}">Compléter le bail</button></div><div class="card"><h3>Parcours du locataire</h3><ol class="journey"><li>${badge("Entrée")} ${dateFr(t.start)}</li><li>${entry?linked("inspections",entry.id,"État des lieux d'entrée"):!t.end?`<button class="link-button" data-action="inspection-add" data-tenant="${h(t.id)}" data-type="Entrée">Créer l'état des lieux d'entrée</button>`:"État d'entrée non enregistré"}</li><li>${paymentsHere.length} paiement(s) enregistrés</li><li>${exit?linked("inspections",exit.id,"État des lieux de sortie"):!t.end?`<button class="link-button" data-action="inspection-add" data-tenant="${h(t.id)}" data-type="Sortie">Créer l'état des lieux de sortie</button>`:"État de sortie non enregistré"}</li><li>${t.end?`Sortie le ${dateFr(t.end)}`:exit?.finalizedAt?`<button class="btn small danger" data-action="tenant-close" data-id="${h(t.id)}">Clôturer la location</button>`:"Sortie à réaliser"}</li></ol></div></div>
   <div class="detail-grid spaced"><div class="card"><div class="card-head"><h3>Paiements</h3>${t.end?"":`<button class="btn small primary" data-action="payment-add" data-tenant="${h(t.id)}">+ Paiement</button>`}</div>${paymentsHere.length?paymentsHere.map(x=>`<div class="quick-row"><span>${dateFr(x.date)} · ${h(x.month)} · ${h(x.method)}</span><strong>${money(x.amount)}</strong></div>`).join(""):`<p class="muted">Aucun paiement.</p>`}</div><div class="card"><h3>États des lieux</h3>${inspectionsHere.length?inspectionsHere.map(x=>`<div class="quick-row">${linked("inspections",x.id,`État de ${x.type.toLowerCase()}`)}<span>${dateFr(x.date)} · ${x.finalizedAt?"signé":"brouillon"}</span></div>`).join(""):`<p class="muted">Aucun état des lieux.</p>`}</div></div>`);
 }
 const photoUrl = (inspectionId,photoId) => `/api/photo?inspection=${encodeURIComponent(inspectionId)}&id=${encodeURIComponent(photoId)}`;
 function inspectionDetail(i) {
   if (!i) return empty("État des lieux introuvable");
   const t=tenant(i.tenantId), u=unit(i.unitId), locked=!!i.finalizedAt;
-  return shell(`État des lieux de ${i.type.toLowerCase()}`,`${dateFr(i.date)} · ${t?.name||"Locataire"}`,`${back("inspections")}${locked?"":`<button class="btn secondary" data-action="inspection-edit" data-id="${h(i.id)}">Modifier le constat</button>`}<button class="btn primary" data-action="inspection-print" data-id="${h(i.id)}">Imprimer / PDF</button>`,`<div class="detail-grid"><div class="card"><h3>Dossier</h3><p>Locataire : ${linked("tenants",i.tenantId,t?.name)}</p><p>Logement : ${linked("units",i.unitId,u?.name)}</p><p>Date : ${dateFr(i.date)} · Heure : ${h(i.time||"—")}</p><p>Clés : ${h(i.keys??"—")} · Badges : ${h(i.badges??"—")}</p><p>Compteurs : électricité ${h(i.electricity||"—")} · eau ${h(i.water||"—")}</p><p>Statut : ${badge(locked?"Signé":"Brouillon")}</p><p>Observations : ${h(i.notes||"Aucune")}</p>${i.reservations?`<p>Réserves : ${h(i.reservations)}</p>`:""}</div><div class="card"><h3>Signatures dans l'application</h3><div class="signature-grid"><div><strong>Bailleur</strong>${safeSignature(i.signatures?.landlord)?`<img src="${safeSignature(i.signatures.landlord)}" alt="Signature du bailleur">`:`<p class="muted">À signer</p>`}${locked?"":`<button class="btn small secondary" data-action="sign" data-role="landlord" data-id="${h(i.id)}">Signer</button>`}</div><div><strong>Locataire</strong>${safeSignature(i.signatures?.tenant)?`<img src="${safeSignature(i.signatures.tenant)}" alt="Signature du locataire">`:`<p class="muted">À signer</p>`}${locked?`<p class="muted">Signature recueillie en présence du propriétaire.</p>`:`<button class="btn small secondary" data-action="sign" data-role="tenant" data-id="${h(i.id)}">Faire signer le locataire</button>`}</div></div>${locked?`<p class="muted">Finalisé le ${dateFr(i.finalizedAt)}</p>`:`<button class="btn primary" data-action="inspection-finalize" data-id="${h(i.id)}">Finaliser après les deux signatures</button>`}</div></div>
-  <div class="card spaced"><h3>Constat détaillé ${i.type==="Sortie"?"(comparaison avec l'entrée)":""}</h3><div class="table-wrap"><table><thead><tr><th>Section / élément</th>${i.type==="Sortie"?"<th>Entrée</th>":""}<th>${i.type==="Sortie"?"Sortie":"État"}</th><th>Observations</th></tr></thead><tbody>${(i.items||[]).map(x=>{const previous=state.inspections.find(e=>e.tenantId===i.tenantId&&e.type==="Entrée")?.items?.find(e=>e.section===x.section&&e.item===x.item);return `<tr><td>${h(x.section||"Général")} · ${h(x.item)}</td>${i.type==="Sortie"?`<td>${h(previous?.state||"—")}</td>`:""}<td>${badge(x.state)}</td><td>${h(x.note||"—")}</td></tr>`}).join("")}</tbody></table></div></div>
+  return shell(`État des lieux de ${i.type.toLowerCase()}`,`${dateFr(i.date)} · ${t?.name||"Locataire"}`,`${back("inspections")}${forceButton("inspections",i.id)}${locked?"":`<button class="btn secondary" data-action="inspection-edit" data-id="${h(i.id)}">Modifier le constat</button>`}<button class="btn primary" data-action="inspection-print" data-id="${h(i.id)}">Imprimer / PDF</button>`,`<div class="detail-grid"><div class="card"><h3>Dossier</h3><p>Locataire : ${linked("tenants",i.tenantId,t?.name)}</p><p>Logement : ${linked("units",i.unitId,u?.name)}</p><p>Date : ${dateFr(i.date)} · Heure : ${h(i.time||"—")}</p><p>Clés : ${h(i.keys??"—")} · Badges : ${h(i.badges??"—")}</p><p>Compteurs : électricité ${h(i.electricity||"—")} · eau ${h(i.water||"—")}</p><p>Statut : ${badge(locked?"Signé":"Brouillon")}</p><p>Observations : ${h(i.notes||"Aucune")}</p>${i.reservations?`<p>Réserves : ${h(i.reservations)}</p>`:""}</div><div class="card"><h3>Signatures dans l'application</h3><div class="signature-grid"><div><strong>Bailleur</strong>${safeSignature(i.signatures?.landlord)?`<img src="${safeSignature(i.signatures.landlord)}" alt="Signature du bailleur">`:`<p class="muted">À signer</p>`}${locked?"":`<button class="btn small secondary" data-action="sign" data-role="landlord" data-id="${h(i.id)}">Signer</button>`}</div><div><strong>Locataire</strong>${safeSignature(i.signatures?.tenant)?`<img src="${safeSignature(i.signatures.tenant)}" alt="Signature du locataire">`:`<p class="muted">À signer</p>`}${locked?`<p class="muted">Signature recueillie en présence du propriétaire.</p>`:`<button class="btn small secondary" data-action="sign" data-role="tenant" data-id="${h(i.id)}">Faire signer le locataire</button>`}</div></div>${locked?`<p class="muted">Finalisé le ${dateFr(i.finalizedAt)}</p>`:`<button class="btn primary" data-action="inspection-finalize" data-id="${h(i.id)}">Finaliser après les deux signatures</button>`}</div></div>
+  <div class="card spaced"><h3>Constat détaillé ${i.type==="Sortie"?"(comparaison avec l'entrée)":""}</h3><div class="table-wrap"><table><thead><tr><th>Section / élément</th>${i.type==="Sortie"?"<th>Entrée</th>":""}<th>${i.type==="Sortie"?"Sortie":"État"}</th><th>Observations</th></tr></thead><tbody>${(i.items||[]).map(x=>{const previous=state.inspections.find(e=>e.tenantId===i.tenantId&&e.type==="Entrée")?.items?.find(e=>e.section===x.section&&e.item===x.item);return `<tr><td>${h(x.section||"Général")} · ${h(x.item)}</td>${i.type==="Sortie"?`<td>${h(previous?.state||"—")}</td>`:""}<td>${badge(x.state)}</td><td>${h(observationText(x)||"—")}</td></tr>`}).join("")}</tbody></table></div></div>
   <div class="card spaced"><div class="card-head"><h3>Photos (${i.photos?.length||0})</h3>${locked?"":`<label class="btn small primary file-label">+ Prendre une photo<input id="cameraFile" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden></label><label class="btn small secondary file-label">+ Depuis le téléphone<input id="photoFiles" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden></label>`}</div><div class="photo-grid">${(i.photos||[]).map(photo=>`<figure><a href="${photoUrl(i.id,photo.id)}" target="_blank" rel="noopener"><img loading="lazy" src="${photoUrl(i.id,photo.id)}" alt="${h(photo.caption||"Photo de l'état des lieux")}"></a><figcaption>${h(photo.caption||"Photo")}</figcaption>${locked?"":`<button class="btn small danger" data-action="photo-delete" data-id="${h(photo.id)}" data-inspection="${h(i.id)}">Retirer</button>`}</figure>`).join("")}</div>${!i.photos?.length?`<p class="muted">Aucune photo ajoutée.</p>`:""}</div>`);
 }
 function fields(list, values = {}) {
@@ -284,6 +292,7 @@ function fields(list, values = {}) {
 const option = (arr, label) => arr.map(x=>({value:x.id,label:label(x)}));
 const choices = (arr) => arr.map(x=>({value:x,label:x}));
 function openModal(title, html, onSubmit) {
+  const mainSubmit=$("#modalForm").querySelector('[type="submit"]');mainSubmit.textContent="Enregistrer";mainSubmit.className="btn primary";mainSubmit.disabled=false;
   $("#modalTitle").textContent=title; $("#modalBody").innerHTML=html; $("#modalBackdrop").hidden=false;
   $("#modalForm").onsubmit=async event=>{ event.preventDefault(); const submit=event.target.querySelector('[type="submit"]'); submit.disabled=true;
     try { await onSubmit(Object.fromEntries(new FormData(event.target))); closeModal(); }
@@ -294,9 +303,9 @@ function openModal(title, html, onSubmit) {
 function closeModal() { $("#modalBackdrop").hidden=true; $("#modalForm").reset(); }
 function addProperty(existing) {
   openModal(existing?"Modifier la propriété":"Ajouter une propriété",fields([
-    {name:"name",label:"Nom de la propriété",required:true},{name:"district",label:"Quartier",required:true},
+    {name:"color",label:"Couleur de la propriété",type:"select",options:propertyColors.map(([value,label])=>({value,label}))},{name:"name",label:"Nom de la propriété",required:true},{name:"district",label:"Quartier",required:true},
     {name:"address",label:"Adresse complète",full:true},{name:"cadastral",label:"Parcelle / référence cadastrale"},{name:"type",label:"Type",type:"select",options:choices(["Studio","Appartement","Immeuble","Villa","Maison","Local commercial","Autre"])}
-  ],existing),data=>{ const record=existing||{id:id("p")};Object.assign(record,data);if(!existing)state.properties.push(record);persist();if(!existing)navigate("properties",record.id); });
+  ],existing)+`<div class="field"><label for="propertyPhoto">Photo du bien (facultative)</label><input id="propertyPhoto" type="file" accept="image/jpeg,image/png,image/webp"><small>JPEG, PNG ou WebP. La photo sera adaptée pour le téléphone.</small></div>`,async data=>{ const file=$("#propertyPhoto").files[0];const record=existing||{id:id("p")};Object.assign(record,data);if(!existing)state.properties.push(record);persist();navigate("properties",record.id);if(file)await savePropertyPhoto(record.id,file); });
 }
 function equipmentChoices(type,chosen=[]) {
   return (roomEquipment[type]||[]).map(item=>`<label class="equipment-option"><input type="checkbox" value="${h(item)}" ${chosen.includes(item)?"checked":""}>${h(item)}</label>`).join("");
@@ -346,8 +355,10 @@ function addTenant(existing, unitId) {
     {name:"rentReview",label:"Révision du loyer",type:"select",options:[{value:"",label:"À préciser"},...choices(["Selon accord écrit des parties","Tous les deux ans sous réserve des règles applicables","Sans révision prévue"])]},
     {name:"feesResponsibility",label:"Frais d'enregistrement",type:"select",options:[{value:"",label:"À préciser"},...choices(["À la charge du preneur","À la charge du bailleur","Partagés entre les parties"])]},
     {name:"preOccupancyWorks",label:"Travaux avant occupation (si prévus)",type:"textarea",full:true},
-    {name:"leaseNotes",label:"Conditions particulières",type:"textarea",full:true}
-  ],existing||{unitId,start:today(),dueDay:1,purpose:"Habitation"}),data=>{
+    {name:"leaseNotes",label:"Conditions particulières",type:"textarea",full:true},
+    {name:"leaseManual",label:"Compléments manuels du bail",type:"textarea",full:true},
+    {name:"manualLines",label:"Lignes à laisser pour compléter à la main sur papier",type:"select",options:choices(["2","5","8","12"])}
+  ],existing||{unitId,start:today(),dueDay:1,purpose:"Habitation",manualLines:"5"}),data=>{
     if(Number(data.dueDay)>31)throw Error("Le jour d'échéance doit être compris entre 1 et 31.");
     if(data.leaseEnd&&data.leaseEnd<data.start)throw Error("La fin du bail doit être après la date d'entrée.");
     if(existing?.end && data.unitId!==existing.unitId)throw Error("Un dossier clôturé conserve son logement historique.");
@@ -404,7 +415,7 @@ function addInspection(tenantId, preferredType = "Entrée", existing = null) {
     {name:"keyDetails",label:"Détail des clés et équipements",type:"textarea",full:true},
     ...(selectedType==="Sortie"?[{name:"reservations",label:"Réserves, réparations et points à suivre",type:"textarea",full:true}]:[]),
     {name:"notes",label:"Observations générales",type:"textarea",full:true}
-  ],existing||{tenantId:selectedTenant,type:selectedType,date:today()})+`<p class="muted">${selectedType==="Sortie"?(baseline?`Comparaison avec l'état d'entrée du ${dateFr(baseline.date)}. Saisissez l'état constaté à la sortie.`:"Aucun état d'entrée enregistré : saisissez les constats de sortie sans comparaison."):"Sélectionnez l'état constaté pour chaque élément. Aucun état n'est présumé bon."}</p><div class="inspection-checklist">${inspected.map((item,n)=>{const previous=baseline?.items?.find(x=>x.section===item.section&&x.item===item.item);return `${n===0||item.section!==inspected[n-1].section?`<h3 class="inspection-section">${h(item.section||"Autres éléments")}</h3>`:""}<div class="inspection-line"><strong>${h(item.item)}</strong>${selectedType==="Sortie"?`<small>Entrée : ${h(previous?.state||"sans constat")}</small>`:""}<select name="condition_${n}" required><option value="">Choisir l'état</option>${["Bon","Moyen","Mauvais","Non applicable"].map(v=>`<option value="${v}" ${existing?.items?.[n]?.state===v?"selected":""}>${v}</option>`).join("")}</select><input name="note_${n}" value="${h(existing?.items?.[n]?.note||"")}" placeholder="Observation précise"></div>`}).join("")}</div><div class="inspection-photo-choice"><h3>Photos du constat</h3><p class="muted">Vous pouvez les ajouter maintenant. Elles seront envoyées après l'enregistrement du constat.</p><label class="btn secondary file-label">Prendre une photo<input id="inspectionCamera" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden></label><label class="btn secondary file-label">Choisir plusieurs photos<input id="inspectionGallery" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden></label></div>`;
+  ],existing||{tenantId:selectedTenant,type:selectedType,date:today()})+`<p class="muted">${selectedType==="Sortie"?(baseline?`Comparaison avec l'état d'entrée du ${dateFr(baseline.date)}. Saisissez l'état constaté à la sortie.`:"Aucun état d'entrée enregistré : saisissez les constats de sortie sans comparaison."):"Sélectionnez l'état constaté pour chaque élément. Aucun état n'est présumé bon."}</p><div class="inspection-checklist">${inspected.map((item,n)=>{const previous=baseline?.items?.find(x=>x.section===item.section&&x.item===item.item);return `${n===0||item.section!==inspected[n-1].section?`<h3 class="inspection-section">${h(item.section||"Autres éléments")}</h3>`:""}<div class="inspection-line"><strong>${h(item.item)}</strong>${selectedType==="Sortie"?`<small>Entrée : ${h(previous?.state||"sans constat")}</small>`:""}<select name="condition_${n}" required><option value="">Choisir l'état</option>${["Bon","Moyen","Mauvais","Non applicable"].map(v=>`<option value="${v}" ${existing?.items?.[n]?.state===v?"selected":""}>${v}</option>`).join("")}</select><label class="observation-field">Observation adaptée<select name="observation_${n}" aria-label="Observation pour ${h(item.item)}"><option value="">Choisir une observation (facultatif)</option>${[...new Set([...observationOptions(item.item),existing?.items?.[n]?.observation].filter(Boolean))].map(value=>`<option value="${h(value)}" ${existing?.items?.[n]?.observation===value?"selected":""}>${h(value)}</option>`).join("")}</select></label><label class="observation-field">Précisions libres<textarea name="note_${n}" placeholder="Emplacement, détail, dimensions…">${h(existing?.items?.[n]?.note||"")}</textarea></label></div>`}).join("")}</div><div class="inspection-photo-choice"><h3>Photos du constat</h3><p class="muted">Vous pouvez les ajouter maintenant. Elles seront envoyées après l'enregistrement du constat.</p><label class="btn secondary file-label">Prendre une photo<input id="inspectionCamera" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden></label><label class="btn secondary file-label">Choisir plusieurs photos<input id="inspectionGallery" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden></label></div>`;
   openModal(existing?"Modifier l'état des lieux":"Nouvel état des lieux",html,async data=>{
     const t=tenant(data.tenantId);if(!t)throw Error("Locataire introuvable.");
     if(!existing&&state.inspections.some(i=>i.tenantId===t.id&&i.type===data.type))throw Error(`Un état des lieux de ${data.type.toLowerCase()} existe déjà pour ce locataire.`);
@@ -415,7 +426,7 @@ function addInspection(tenantId, preferredType = "Entrée", existing = null) {
     const files=[...$("#inspectionCamera").files,...$("#inspectionGallery").files];
     const record=existing||{id:id("ins"),photos:[],signatures:{landlord:null,tenant:null},finalizedAt:null};
     Object.assign(record,{tenantId:t.id,unitId:t.unitId,type:data.type,date:data.date,time:data.time,electricity:data.electricity,water:data.water,keys:data.keys,badges:data.badges,keyDetails:data.keyDetails,reservations:data.reservations||"",notes:data.notes,
-      items:inspected.map((item,n)=>({section:item.section||"Autres éléments",item:item.item,state:data[`condition_${n}`],note:data[`note_${n}`]}))});
+      items:inspected.map((item,n)=>({section:item.section||"Autres éléments",item:item.item,state:data[`condition_${n}`],observation:data[`observation_${n}`],note:data[`note_${n}`]}))});
     if(existing)record.signatures={landlord:null,tenant:null};else state.inspections.push(record);
     persist();navigate("inspections",record.id);
     if(files.length)await attachPhotos(record,files);
@@ -440,25 +451,7 @@ function issueInvoices() {
   }
   if(count)persist();navigate("invoices");toast(`${count} facture(s) créée(s)`);
 }
-function removeRecord(kind,key) {
-  const record=state[kind]?.find(x=>x.id===key);if(!record)return;
-  if(kind==="properties"){
-    const unitsHere=state.units.filter(u=>u.propertyId===key),ids=new Set(unitsHere.map(u=>u.id));
-    if(state.tenants.some(t=>ids.has(t.unitId))||state.inspections.some(i=>ids.has(i.unitId))){
-      if(unitsHere.some(u=>u.status==="occupied"))return toast("Terminez d'abord les locations en cours avant d'archiver ce bien.");
-      if(!confirm(`Archiver « ${record.name} » ? L'historique locatif restera accessible dans les dossiers.`))return;
-      record.archived=true;selected=null;persist();return;
-    }
-    if(!confirm(`Supprimer définitivement « ${record.name} » et ses ${unitsHere.length} logement(s) sans historique locatif ainsi que les interventions associées ?`))return;
-    state.units=state.units.filter(u=>!ids.has(u.id));state.maintenance=state.maintenance.filter(m=>!ids.has(m.unitId));
-    state[kind]=state[kind].filter(x=>x.id!==key);selected=null;persist();return;
-  }
-  if(kind==="units"&&(state.tenants.some(t=>t.unitId===key)||state.inspections.some(i=>i.unitId===key)))return toast("Ce logement fait partie de l'historique d'un locataire.");
-  if(kind==="tenants")return toast("Clôturez ce locataire pour conserver son historique.");
-  if(!confirm("Supprimer définitivement cet élément ?"))return;
-  if(kind==="units")state.maintenance=state.maintenance.filter(m=>m.unitId!==key);
-  state[kind]=state[kind].filter(x=>x.id!==key);selected=null;persist();
-}
+function removeRecord(kind,key) { forceDeleteDialog(kind,key); }
 async function uploadPhotos(event) {
   const inspection=state.inspections.find(i=>i.id===selected);
   if(!inspection||inspection.finalizedAt)return;
@@ -469,9 +462,9 @@ async function attachPhotos(inspection,files) {
   if(!files.length)return;
   if(!await flush())return toast("Enregistrez d'abord l'état des lieux avant d'ajouter des photos.");
   for(const file of files){
-    if(file.size>3_000_000 || !["image/jpeg","image/png","image/webp"].includes(file.type)){toast(`${file.name} : image JPEG, PNG ou WebP de 3 Mo maximum.`);continue;}
     try {
-      const result=await fetch(`/api/photo?inspection=${encodeURIComponent(inspection.id)}`,{method:"POST",credentials:"same-origin",headers:{"content-type":file.type},body:file});
+      const image=await scaledPhoto(file);
+      const result=await fetch(`/api/photo?inspection=${encodeURIComponent(inspection.id)}`,{method:"POST",credentials:"same-origin",headers:{"content-type":image.type},body:image});
       if(!result.ok)throw Error((await result.json()).error||"Envoi impossible");
       const photo=await result.json();
       const caption=prompt("Légende de la photo (pièce, élément, observation)",file.name)?.trim()||file.name;
@@ -540,6 +533,11 @@ function printInspection(key) {
 function blobAsDataUrl(blob) { return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(Error("Lecture d'image impossible"));reader.readAsDataURL(blob);}); }
 async function exportData() {
   const backup=structuredClone(state);
+  for(const p of backup.properties)if(p.photo){
+    const response=await fetch(propertyPhotoUrl(p),{credentials:"same-origin"});
+    if(!response.ok)throw Error("Une photo de propriété est inaccessible. Sauvegarde interrompue.");
+    p.photo.dataUrl=await blobAsDataUrl(await response.blob());
+  }
   for(const inspection of backup.inspections)for(const photo of inspection.photos||[]){
     const response=await fetch(photoUrl(inspection.id,photo.id),{credentials:"same-origin"});
     if(!response.ok)throw Error("Une photo est inaccessible. La sauvegarde n'a pas été créée.");
@@ -552,7 +550,11 @@ async function importData(event) {
   const file=event.target.files?.[0];if(!file)return;
   try { const parsed=JSON.parse(await file.text()); if(!Array.isArray(parsed.properties)||!Array.isArray(parsed.tenants))throw Error("Fichier incompatible.");
     if(!confirm("Remplacer toutes les données de ce compte par le contenu du fichier ?"))return;
-    const photos=[];
+    const photos=[],propertyPhotos=[],finalizations=[];
+    for(const p of parsed.properties)if(p.photo){
+      if(!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(p.photo.dataUrl||"")||p.photo.dataUrl.length>4_100_000)throw Error("La photo de propriété manque dans cette sauvegarde.");
+      propertyPhotos.push({id:p.id,dataUrl:p.photo.dataUrl});delete p.photo;
+    }
     for(const inspection of parsed.inspections||[]){
       const refs=Array.isArray(inspection.photos)?inspection.photos:[];
       for(const photo of refs){
@@ -563,6 +565,7 @@ async function importData(event) {
         }
       }
       inspection.photos=[];
+      if(inspection.finalizedAt){finalizations.push({id:inspection.id,date:inspection.finalizedAt});inspection.finalizedAt=null;}
     }
     state=normalize(parsed);persist();
     if(!await flush())throw Error("Données non enregistrées ; vérifiez la connexion et relancez l'import.");
@@ -573,7 +576,11 @@ async function importData(event) {
       const saved=await response.json(),inspection=state.inspections.find(i=>i.id===item.inspectionId);
       inspection.photos.push({id:saved.id,mime:saved.mime,caption:item.photo.caption||"Photo"});persist();
     }
-    await flush();toast("Sauvegarde importée avec ses photos.");
+    await flush();
+    for(const item of propertyPhotos)await savePropertyPhoto(item.id,await (await fetch(item.dataUrl)).blob());
+    for(const item of finalizations){const i=state.inspections.find(x=>x.id===item.id);if(i)i.finalizedAt=item.date;}
+    persist();if(!await flush())throw Error("Vérifiez la connexion pour finaliser la restauration.");
+    toast("Sauvegarde importée avec ses photos.");
   }catch(error){toast(error.message||"Fichier invalide.");}
 }
 async function disconnect() {
@@ -583,13 +590,19 @@ async function disconnect() {
 
 $("#nav").addEventListener("click",event=>{const button=event.target.closest("[data-view]");if(button)navigate(button.dataset.view);});
 document.addEventListener("click",async event=>{
-  const nav=event.target.closest("[data-view]");if(nav&& !nav.closest("#nav")){navigate(nav.dataset.view);return;}
-  const open=event.target.closest("[data-open]");if(open){navigate(open.dataset.open,open.dataset.id);return;}
+  const nav=event.target.closest("[data-view]");if(nav&& !nav.closest("#nav")){navigate(nav.dataset.view,null,nav.dataset.filter||"");return;}
+  const open=event.target.closest("[data-open]");if(open){if(open.dataset.notification){state.settings.readNotifications=[...(state.settings.readNotifications||[]),open.dataset.notification].slice(-1000);persist();}navigate(open.dataset.open,open.dataset.id);return;}
   const button=event.target.closest("[data-action]");if(!button)return;
   const {action,kind,id:key,tenant:tenantId,unit:unitId,property:propertyId,type}=button.dataset;
   try {
     if(!["lease-print","receipt-print","invoice-print","inspection-print","report-print","export","logout"].includes(action))requireAdmin();
     if(action==="property-add")addProperty();
+    if(action==="force-delete")forceDeleteDialog(kind,key);
+    if(action==="property-photo-delete")await removePropertyPhoto(key);
+    if(action==="install")await installApp();
+    if(action==="lease-complete")completeLease(key);
+    if(action==="import-codes")downloadImportCodes();
+    if(action==="archive"){const p=property(key);if(p&&!state.units.some(u=>u.propertyId===key&&u.status==="occupied")){p.archived=true;closeModal();persist();navigate("properties");}}
     if(action==="property-archives"){showArchived=!showArchived;render();}
     if(action==="property-restore"){const p=property(key);if(p){p.archived=false;persist();}}
     if(action==="unit-add")addUnit(null,propertyId);
@@ -625,7 +638,123 @@ $("#modalBackdrop").onclick=event=>{if(event.target===event.currentTarget)closeM
 $("#syncBtn").onclick=async()=>{if(currentFlush)await currentFlush;if(dirty)await flush();else try{await loadState();toast("Données actualisées");}catch(error){toast(error.message);}};
 let deferredInstall;
 addEventListener("beforeinstallprompt",event=>{event.preventDefault();deferredInstall=event;$("#installBtn").hidden=false;});
-$("#installBtn").onclick=async()=>{if(!deferredInstall)return;deferredInstall.prompt();await deferredInstall.userChoice;deferredInstall=null;$("#installBtn").hidden=true;};
-addEventListener("appinstalled",()=>$("#installBtn").hidden=true);
+$("#installBtn").onclick=()=>installApp();
+$("#helpBtn").onclick=()=>{const panel=$("#helpPanel");panel.hidden=!panel.hidden;$("#helpBtn").setAttribute("aria-expanded",String(!panel.hidden));};
+addEventListener("appinstalled",()=>{deferredInstall=null;$("#installBtn").textContent="Installée ✓";});
+const propertyColors=[["#176a61","Vert"],["#346aab","Bleu"],["#8061a4","Violet"],["#b96b21","Orange"],["#aa4e75","Rose"],["#526675","Ardoise"]];
+const propertyColor=p=>/^#[0-9a-f]{6}$/i.test(p?.color||"")?p.color:propertyColors[Math.max(0,state.properties.findIndex(x=>x.id===p?.id))%propertyColors.length][0];
+const propertyPhotoUrl=p=>`/api/photo?property=${encodeURIComponent(p.id)}&id=${encodeURIComponent(p.photo.id)}`;
+const forceButton=(kind,key)=>isAdmin()?`<button class="btn danger small" data-action="force-delete" data-kind="${kind}" data-id="${h(key)}">Suppression administrateur</button>`:"";
+const filterLabels={expiring:"Baux expirés ou à échéance sous 90 jours",missingTenant:"Logements occupés sans bail",missingEntry:"Entrées non signées",drafts:"Constats en brouillon",occupied:"Logements occupés",month:"Encaissements du mois",remaining:"Loyers du mois à percevoir",open:"Interventions ouvertes"};
+function filteredRecords(kind){
+  const snap=portfolioSnapshot();
+  if(currentFilter==="expiring"&&kind==="tenants")return snap.leases;
+  if(currentFilter==="missingTenant"&&kind==="units")return snap.missingTenant;
+  if(currentFilter==="occupied"&&kind==="units")return snap.occupied;
+  if(currentFilter==="remaining"&&kind==="tenants")return snap.remaining.map(x=>x.t);
+  if(currentFilter==="drafts"&&kind==="inspections")return state.inspections.filter(x=>!x.finalizedAt);
+  if(currentFilter==="month"&&kind==="payments")return state.payments.filter(x=>x.month===monthKey());
+  if(currentFilter==="open"&&kind==="maintenance")return state.maintenance.filter(x=>x.status!=="Terminé");
+  return state[kind];
+}
+function missingEntryView(){
+  return shell("Entrées à finaliser","Ouvrez le constat existant ou créez celui du locataire.",back("inspections"),table(["Locataire","Logement","État d’entrée"],portfolioSnapshot().missingEntry.map(t=>{
+    const i=state.inspections.find(x=>x.tenantId===t.id&&x.type==="Entrée");
+    return {search:t.name,cells:[linked("tenants",t.id,t.name),linked("units",t.unitId,unit(t.unitId)?.name),i?linked("inspections",i.id,"Ouvrir le brouillon"): `<button class="btn primary small" data-action="inspection-add" data-tenant="${h(t.id)}" data-type="Entrée">Créer le constat</button>`]};
+  })));
+}
+function maintenanceDetail(m){
+  if(!m)return empty("Intervention introuvable");
+  return shell(m.title,`${m.category} · ${dateFr(m.date)}`,`${back("maintenance")}${actions("maintenance",m.id)}`,`<div class="card"><p>Logement : ${linked("units",m.unitId,unit(m.unitId)?.name)}</p><p>Priorité : ${badge(m.priority)} · Statut : ${badge(m.status)}</p><p>Coût : ${money(m.cost)}</p></div>`);
+}
+function completeLease(key){
+  const t=tenant(key);if(!t)return;
+  openModal("Compléter le contrat de bail",`<p>Ces textes seront enregistrés dans le dossier et imprimés à la fin du bail.</p>`+fields([
+    {name:"leaseNotes",label:"Conditions particulières",type:"textarea",full:true},
+    {name:"leaseManual",label:"Éléments ajoutés manuellement",type:"textarea",full:true},
+    {name:"manualLines",label:"Lignes pour des ajouts manuscrits sur papier",type:"select",options:choices(["2","5","8","12"])}
+  ],{manualLines:"5",...t}),data=>{Object.assign(t,data);persist();toast("Compléments du bail enregistrés");});
+}
+function forceDeleteDialog(kind,key){
+  requireAdmin();const record=state[kind]?.find(x=>x.id===key);if(!record)return;
+  const plan=deletionPlan(state,kind,key),labels={properties:"propriété(s)",units:"logement(s)",tenants:"locataire(s)",payments:"paiement(s)",invoices:"facture(s)",inspections:"état(s) des lieux",maintenance:"intervention(s)"};
+  openModal("Suppression définitive — administrateur",`<div class="delete-warning"><h3>${h(record.name||record.title||record.number||"Dossier sélectionné")}</h3><p>Cette suppression efface aussi les éléments rattachés ci-dessous, même si le logement est occupé ou le constat signé. Elle est irréversible.</p><ul>${Object.entries(plan.counts).filter(([,n])=>n).map(([k,n])=>`<li>${n} ${labels[k]}</li>`).join("")}<li>${plan.photos.length} photo(s)</li></ul></div><button type="button" class="btn secondary" data-action="export">Télécharger une sauvegarde avant suppression</button>${kind==="properties"&&!record.archived&&!state.units.some(u=>u.propertyId===key&&u.status==="occupied")?`<button type="button" class="btn secondary" data-action="archive" data-id="${h(key)}">Archiver en conservant l’historique</button>`:""}<div class="field spaced"><label for="deleteConfirm">Saisissez SUPPRIMER pour confirmer</label><input id="deleteConfirm" name="confirmation" required pattern="SUPPRIMER" autocomplete="off"></div>`,async data=>{
+    if(data.confirmation!=="SUPPRIMER")throw Error("Saisissez exactement SUPPRIMER.");
+    if(!await flush())throw Error("Synchronisez les données avant de supprimer.");
+    const response=await fetch("/api/force-delete",{method:"POST",credentials:"same-origin",headers:{"content-type":"application/json"},body:JSON.stringify({kind,id:key,baseRev:rev,confirmation:data.confirmation})});
+    const result=await response.json();if(!response.ok)throw Error(result.error||"Suppression impossible.");
+    state=normalize(result.payload);rev=result.rev;dirty=false;setSync("Synchronisé",true);navigate(kind);toast(result.warning||"Suppression effectuée.");
+  });
+  const submit=$("#modalForm").querySelector('[type="submit"]');submit.textContent="Supprimer définitivement";submit.className="btn danger";
+}
+async function scaledPhoto(file){
+  if(!["image/jpeg","image/png","image/webp"].includes(file.type))throw Error("Choisissez une image JPEG, PNG ou WebP.");
+  if(file.size<=3_000_000)return file;
+  if(file.size>25_000_000)throw Error("Image limitée à 25 Mo avant adaptation.");
+  const bitmap=await createImageBitmap(file),ratio=Math.min(1,1800/Math.max(bitmap.width,bitmap.height));
+  const canvas=document.createElement("canvas");canvas.width=Math.round(bitmap.width*ratio);canvas.height=Math.round(bitmap.height*ratio);
+  canvas.getContext("2d").drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();
+  const blob=await new Promise(resolve=>canvas.toBlob(resolve,"image/jpeg",0.82));
+  if(!blob||blob.size>3_000_000)throw Error("Photo trop volumineuse. Choisissez une image plus petite.");return blob;
+}
+async function savePropertyPhoto(key,file){
+  const image=await scaledPhoto(file);
+  if(!await flush())throw Error("Enregistrez la propriété avant d’ajouter sa photo.");
+  const response=await fetch(`/api/photo?property=${encodeURIComponent(key)}&rev=${rev}`,{method:"POST",credentials:"same-origin",headers:{"content-type":image.type},body:image});
+  const data=await response.json();if(!response.ok)throw Error(data.error||"Photo non enregistrée.");
+  state=normalize(data.payload);rev=data.rev;render();toast("Photo enregistrée");
+}
+async function removePropertyPhoto(key){
+  const p=property(key);if(!p?.photo||!confirm("Retirer la photo de cette propriété ?"))return;
+  if(!await flush())throw Error("Synchronisez avant de retirer la photo.");
+  const response=await fetch(`${propertyPhotoUrl(p)}&rev=${rev}`,{method:"DELETE",credentials:"same-origin"});
+  const data=await response.json();if(!response.ok)throw Error(data.error||"Suppression impossible.");
+  state=normalize(data.payload);rev=data.rev;render();
+}
+function importsView(){
+  return shell("Importer vos données Excel","Préparez vos données, contrôlez l’aperçu, puis validez.","",`<div class="workflow"><span class="done">1 · Modèle vierge</span><span>2 · Vos données</span><span>3 · Vérification et import</span></div><div class="grid-2"><div class="card"><h3>Préparer le fichier</h3><p>Le modèle contient cinq feuilles : propriétés, logements, locataires, échéances et paiements. Remplissez uniquement les feuilles utiles.</p><a class="btn primary" href="/imports/GestiLoc_Dbz_Modele_Import.xlsx" download>Télécharger les modèles Excel</a><p>Chaque ligne porte un code unique. Réutilisez ce code pour modifier la même fiche sans la créer une seconde fois.</p><button class="btn secondary" data-action="import-codes">Télécharger les codes des fiches existantes</button></div><div class="card"><h3>Choisir le classeur</h3><p>Les états Payé, Partiel et Impayé sont calculés à partir des montants dus et réellement reçus. Le statut attendu du modèle permet de vérifier vos totaux.</p><label class="btn primary file-label">Sélectionner le fichier Excel<input id="excelFile" type="file" accept=".xlsx" hidden></label><p class="muted">Format .xlsx · 5 Mo maximum · 2 000 lignes par feuille et par import. Aucun enregistrement avant votre validation.</p></div></div><div class="card spaced"><h3>Comment relier les données ?</h3><p>Recopiez le code de la propriété dans ses logements, puis le code du logement dans le locataire. Pour une échéance ou un paiement, utilisez le code du locataire.</p><p>Dates : AAAA-MM-JJ. Mois de loyer : AAAA-MM. Montants : nombres entiers en FCFA. Les photos se joignent directement aux fiches.</p><p>Pour une mise à jour, les colonnes du modèle remplacent leurs valeurs actuelles, y compris les cellules vides. Les constats, photos et signatures restent attachés aux dossiers.</p></div>`);
+}
+async function previewExcelImport(event){
+  const file=event.target.files[0];event.target.value="";if(!file)return;
+  try{
+    if(!/\.xlsx$/i.test(file.name)||file.size>5_000_000)throw Error("Choisissez un fichier .xlsx de 5 Mo maximum.");
+    toast("Lecture du classeur…");
+    const sheets=await readExcelFile(file);
+    if(!await flush())throw Error("Synchronisez les changements avant d’importer.");
+    const previewRev=rev,result=prepareImport(sheets,state);
+    const rows=result.changes;
+    openModal("Vérifier l’import Excel",`<p>${rows.filter(x=>x.action==="Ajouter").length} ajout(s) · ${rows.filter(x=>x.action==="Mettre à jour").length} mise(s) à jour · ${rows.filter(x=>x.action==="Identique").length} identique(s).</p>${result.errors.length?`<div class="delete-warning"><strong>${result.errors.length} erreur(s) à corriger. Aucune donnée ne sera importée.</strong><ul>${result.errors.slice(0,50).map(error=>`<li>${h(error)}</li>`).join("")}</ul>${result.errors.length>50?"<p>Les 50 premières erreurs sont affichées.</p>":""}</div>`:"<p>Contrôlez les lignes ci-dessous avant de confirmer. Les fiches absentes du classeur seront conservées.</p>"}<div class="table-wrap import-preview"><table><thead><tr><th>Type</th><th>Code</th><th>Élément</th><th>Action</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${h(r.sheet)}</td><td>${h(r.code)}</td><td>${h(r.label)}</td><td>${h(r.action)}</td></tr>`).join("")}</tbody></table></div>`,async()=>{
+      if(result.errors.length)throw Error("Corrigez les erreurs avant l’import.");
+      if(dirty||rev!==previewRev)throw Error("Les données ont changé. Fermez puis sélectionnez de nouveau le fichier.");
+      const response=await api("PUT",{payload:result.payload,baseRev:previewRev});
+      const saved=await response.json();
+      if(!response.ok)throw Error(response.status===409?"Un autre appareil a modifié les données. Actualisez puis relancez l’import.":saved.error||"Import non enregistré.");
+      state=normalize(result.payload);rev=saved.rev;dirty=false;setSync("Synchronisé",true);navigate("imports");toast("Import enregistré. Retrouvez les fiches dans leurs menus.");
+    });
+    const submit=$("#modalForm").querySelector('[type="submit"]');submit.textContent="Confirmer l’import";submit.disabled=!!result.errors.length;
+  }catch(error){toast(error.message||"Lecture du fichier impossible.");}
+}
+function downloadImportCodes(){
+  const csvCell=value=>`"${String(value??"").replace(/^[=+@-]/,"'$&").replace(/"/g,'""')}"`;
+  const rows=[["Type","Code","Nom ou référence","Code lié"],...importSchemas.flatMap(s=>state[s.kind].map(r=>[s.label,r.importCode||r.id,r.name||r.number||r.month,r.propertyId?(property(r.propertyId)?.importCode||r.propertyId):r.tenantId?(tenant(r.tenantId)?.importCode||r.tenantId):r.unitId?(unit(r.unitId)?.importCode||r.unitId):""]))];
+  const url=URL.createObjectURL(new Blob(["\ufeff"+rows.map(r=>r.map(csvCell).join(";")).join("\r\n")],{type:"text/csv;charset=utf-8"}));
+  const link=document.createElement("a");link.href=url;link.download="GestiLoc_Dbz_Codes.csv";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+async function installApp(){
+  if(window.matchMedia?.("(display-mode: standalone)").matches||navigator.standalone)return toast("GestiLoc Dbz est déjà ouverte en application.");
+  if(deferredInstall){const prompt=deferredInstall;deferredInstall=null;await prompt.prompt();const result=await prompt.userChoice;if(result.outcome==="accepted")toast("Installation demandée au téléphone.");return;}
+  openModal("Installer GestiLoc Dbz sur le téléphone",`<div class="install-guide"><h3>iPhone ou iPad</h3><p>Ouvrez ce site dans Safari. Appuyez sur Partager, puis « Sur l’écran d’accueil » et « Ajouter ».</p><h3>Android</h3><p>Ouvrez ce site dans Chrome ou Edge. Dans le menu ⋮, choisissez « Installer l’application » ou « Ajouter à l’écran d’accueil ».</p><p>Une icône GestiLoc Dbz ouvrira directement votre espace. Si la session a expiré, connectez-vous avec votre email et votre mot de passe.</p><p class="muted">Une connexion internet reste nécessaire pour enregistrer les données et consulter les photos privées.</p></div>`,()=>{});
+  $("#modalForm").querySelector('[type="submit"]').textContent="J’ai compris";
+}
+const helpTopics=[
+  ["Ajouter mon premier bien","Créez une propriété, puis ajoutez ses logements. Choisissez leur composition et leurs équipements.","properties","Ouvrir les propriétés"],
+  ["Préparer un bail","Ouvrez le logement puis « Continuer : locataire et bail ». Le contrat reprend les données de vos fiches. « Compléter le bail » permet d’ajouter votre texte.","units","Choisir un logement"],
+  ["Faire un état des lieux","Choisissez le locataire et le type de constat. Renseignez les états, observations et photos, puis recueillez les deux signatures.","inspections","Ouvrir les constats"],
+  ["Enregistrer un loyer","Indiquez le mois, le montant reçu et le mode de paiement. Les soldes et les alertes se mettent à jour.","payments","Ouvrir les paiements"],
+  ["Suivre mes échéances","Les notifications ouvrent le dossier concerné et disparaissent après consultation. Les Points à suivre restent disponibles sur l’accueil.","dashboard","Voir les points à suivre"],
+  ["Importer depuis Excel","Téléchargez le modèle, renseignez vos données réelles, puis vérifiez l’aperçu avant de confirmer.","imports","Ouvrir les imports"],
+  ["Installer sur mon téléphone","Ajoutez une icône à l’écran d’accueil pour retrouver rapidement l’application.","settings","Ouvrir l’installation"]
+];
+$("#helpPanel").innerHTML=`<h3>Comment puis-je vous aider ?</h3>${helpTopics.map(([title,text,view,label])=>`<details class="help-bubble"><summary>${h(title)}</summary><p>${h(text)}</p><button class="btn small primary" data-view="${view}">${h(label)} →</button></details>`).join("")}`;
 if("serviceWorker" in navigator)navigator.serviceWorker.register("/sw.js").catch(()=>{});
 initialize();
