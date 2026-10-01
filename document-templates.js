@@ -7,6 +7,43 @@ export const inspectionSections = [
   {title:"Chambre", items:["Porte et poignée","Murs et peinture","Plafond","Sol et plinthes","Fenêtres et vitrages","Volets / rideaux","Prises électriques","Interrupteurs","Points lumineux / douilles","Étagères : fixation et état","Placard","Ventilation / grille d’aération","Propreté générale"]}
 ];
 export const inspectionItems = inspectionSections.flatMap(section => section.items.map(item => ({section:section.title,item})));
+export const roomTypes = ["Salon","Séjour","Cuisine","Chambre","Salle d’eau","WC séparé","Buanderie","Balcon","Terrasse","Autre"];
+export const roomEquipment = {
+  "Salon":["Placards","Étagères","Climatisation","Ventilateur","Luminaires"],
+  "Séjour":["Placards","Étagères","Climatisation","Ventilateur","Luminaires"],
+  "Cuisine":["Placards","Évier","Plan de travail","Hotte","Chauffe-eau","Cuisinière"],
+  "Chambre":["Placards","Étagères","Climatisation","Ventilateur","Miroir"],
+  "Salle d’eau":["Douche","Lavabo","Miroir","Chauffe-eau","Meuble de rangement"],
+  "WC séparé":["WC","Lavabo","Miroir"],
+  "Buanderie":["Arrivée d’eau","Évacuation","Étagères"],
+  "Balcon":["Garde-corps","Éclairage"],
+  "Terrasse":["Garde-corps","Éclairage"],
+  "Autre":["Placards","Étagères","Climatisation","Ventilateur","Luminaires"]
+};
+export function roomSummary(rooms,notes="") {
+  const list=(Array.isArray(rooms)?rooms:[]).filter(room=>room.type).map((room,index)=>{
+    const label=room.label?.trim()||`${room.type} ${rooms.slice(0,index+1).filter(x=>x.type===room.type).length}`;
+    const details=[...(room.equipment||[]),...(room.type==="Salle d’eau"&&room.toilet==="integrated"?["WC intégré"]:[]),room.extra?.trim()].filter(Boolean);
+    return `${label}${details.length?` : ${details.join(", ")}`:""}`;
+  });
+  return [...list,notes?.trim()].filter(Boolean).join(" ; ");
+}
+export function inspectionItemsForUnit(unit) {
+  if(!Array.isArray(unit?.rooms)||!unit.rooms.length)return inspectionItems;
+  const common=inspectionSections[0].items.map(item=>({section:"État général et accès",item}));
+  const counts={};
+  for(const room of unit.rooms){
+    if(!room?.type)continue;
+    counts[room.type]=(counts[room.type]||0)+1;
+    const section=room.label?.trim()||`${room.type} ${counts[room.type]}`;
+    const template=room.type==="Cuisine"?inspectionSections[2]:room.type==="Salle d’eau"||room.type==="WC séparé"?inspectionSections[3]:room.type==="Chambre"?inspectionSections[4]:inspectionSections[1];
+    const items=room.type==="WC séparé"?template.items.filter(x=>!/Douche|pommeau|receveur/.test(x)):template.items;
+    for(const item of items)common.push({section,item});
+    for(const equipment of room.equipment||[])if(!items.some(item=>item.toLowerCase().includes(equipment.toLowerCase())))common.push({section,item:`Équipement : ${equipment}`});
+    if(room.type==="Salle d’eau"&&room.toilet==="integrated")common.push({section,item:"WC intégré"});
+  }
+  return common;
+}
 const esc = value => String(value ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 const text = value => value === null || value === undefined || String(value).trim() === "" ? "À compléter" : esc(value);
 const para = value => text(value).replace(/\n/g,"<br>");
@@ -15,32 +52,7 @@ const amount = value => value !== null && value !== undefined && String(value).t
 const valid = value => value !== null && value !== undefined && String(value).trim() !== "";
 const line = (label,value) => `<p><strong>${esc(label)} :</strong> ${text(value)}</p>`;
 
-export function leaseHTML({tenant,unit,property,settings,entry}) {
-  const t=tenant,u=unit,p=property||{},s=settings||{};
-  const address=[p.address||p.district,s.city].filter(Boolean).join(", ");
-  const missing=[
-    ["nom du bailleur",s.ownerName],["coordonnées du bailleur",s.address],["adresse du bien",address],
-    ["composition du logement",u.description],["date de fin du bail",t.leaseEnd],["montant du loyer",u.rent]
-  ].filter(([,value])=>!valid(value)).map(([label])=>label);
-  return `${missing.length?`<aside class="draft"><strong>Document à compléter avant signature :</strong> ${esc(missing.join(", "))}.</aside>`:""}
-  <h3>Entre les soussignés</h3>
-  <p><strong>Bailleur :</strong> ${text(s.ownerName)}${s.company?` (${esc(s.company)})`:""}<br>Adresse / B.P. : ${text(s.address)} · Téléphone : ${text(s.phone)} · E-mail : ${text(s.email)}</p>
-  <p><strong>Preneur :</strong> ${text(t.name)}<br>Adresse / B.P. : ${text(t.postalAddress)} · Téléphone : ${text(t.phone)} · E-mail : ${text(t.email)}<br>Pièce d’identité : ${text(t.identityNumber)}</p>
-  <h3>Article 1 — Objet et localisation</h3>
-  <p>Le bailleur donne à bail au preneur le logement <strong>${text(u.name)}</strong>, de type ${text(u.type)}, situé dans le bien ${text(p.name)} à ${text(address)}. Précisions d’accès : ${text(u.locationDetail)}. Référence cadastrale : ${text(p.cadastral)}.</p>
-  <h3>Article 2 — Consistance et destination</h3><p>${para(u.description)}</p>${line("Usage convenu",t.purpose)}
-  <h3>Article 3 — État des lieux et remise des accès</h3><p>Un état des lieux d’entrée est établi lors de la remise des accès. Un état des lieux de sortie est établi lors de leur restitution et comparé au constat d’entrée. Les photographies et observations peuvent être annexées aux constats.</p>
-  ${entry?`<p>Constat d’entrée enregistré le ${date(entry.date)} · Clés remises : ${text(entry.keys)} · Badges / télécommandes : ${text(entry.badges)}.</p>`:"<p>État des lieux d’entrée : à réaliser ou à joindre.</p>"}
-  <h3>Article 4 — Durée</h3><p>Prise d’effet : <strong>${date(t.start)}</strong> · Date de fin prévue : <strong>${date(t.leaseEnd)}</strong>. Les conditions de renouvellement et de préavis sont à convenir et à relire entre les parties.</p>
-  <h3>Article 5 — Loyer et charges</h3><table><tr><th>Loyer mensuel</th><td>${amount(u.rent)}</td></tr><tr><th>Charges mensuelles convenues</th><td>${amount(u.charges)}</td></tr><tr><th>Échéance du paiement</th><td>Le ${text(t.dueDay)} de chaque mois</td></tr><tr><th>Modes de paiement convenus</th><td>${text(t.leasePaymentMethod)}</td></tr></table>
-  <h3>Article 6 — Dépôt de garantie</h3><p>Dépôt convenu : <strong>${amount(t.deposit)}</strong>. Les modalités de restitution, ainsi que les retenues justifiées éventuelles, sont à préciser entre les parties.</p>
-  <h3>Article 7 — Utilisation, entretien et charges directes</h3><p>Le preneur occupe les lieux selon la destination indiquée ci-dessus et prend soin des équipements remis. Les abonnements, consommations, réparations, travaux et modalités de visite sont à préciser dans les conditions particulières et annexes.</p>
-  <h3>Article 8 — Conditions particulières</h3><p>${para(t.leaseNotes)}</p>
-  <h3>Article 9 — Clauses complémentaires du bailleur</h3><p>${para(s.leaseClauses)}</p>
-  <h3>Annexes</h3><p>État des lieux d’entrée, relevés, liste des clés et photographies, selon les pièces établies et remises aux parties.</p>
-  <p>Les parties relisent et complètent les clauses applicables avant signature. Fait à ${text(s.city)}, le ____________________, en ______ exemplaires.</p>
-  <div class="signatures"><div><strong>Le bailleur</strong><br>${text(s.ownerName)}<br><br>_______________________</div><div><strong>Le preneur</strong><br>${text(t.name)}<br><br>_______________________</div></div>`;
-}
+export { leaseHTML } from "./lease-model.js";
 
 export function inspectionHTML({inspection,tenant,unit,property,settings,entry,photoUrl,safeSignature}) {
   const i=inspection,t=tenant||{},u=unit||{},p=property||{},s=settings||{};

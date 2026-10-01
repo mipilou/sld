@@ -1,4 +1,4 @@
-# GestiLoc Libreville — version 5
+# GestiLoc Libreville — version 6
 
 Application web installable (PWA) pour gérer un patrimoine locatif. Le compte démarre **sans bien, locataire, paiement ou document fictif**.
 
@@ -6,12 +6,14 @@ Application web installable (PWA) pour gérer un patrimoine locatif. Le compte d
 
 - Connexion e-mail/mot de passe du propriétaire, invitation et récupération de mot de passe via Netlify Identity. Le rôle `admin` est exigé pour lire ou modifier les données et les photos. Les locataires n'ont aucun compte dans l'application.
 - Données de chaque compte isolées dans Netlify Database. Sauvegarde et import JSON, photos incluses, depuis les paramètres.
-- Menus déroulants, fiches liées pour biens (dont studios et appartements), logements et locataires, recherche dans les listes et tableau de bord. Le propriétaire administrateur peut modifier et supprimer les fiches.
+- Menus déroulants, fiches liées pour biens (dont studios et appartements), logements et locataires, recherche dans les listes et tableau de bord. Le propriétaire administrateur peut modifier et supprimer les fiches. Le statut du logement propose **Vacant**, **Occupé** et **En travaux**.
+- Composition guidée : plusieurs pièces de même type, W.C. intégré à la salle d'eau ou séparé, équipements propres à chaque pièce (placards, chauffe-eau, miroir, etc.). Le descriptif du logement et les éléments du constat sont produits à partir de ces choix.
 - Parcours du locataire : entrée, bail prérempli, loyers, états des lieux d'entrée et de sortie, clôture de location avec conservation de l'historique.
 - Paiements avec montant, mois, date, mode d'encaissement, référence et observations ; reçus et factures imprimables.
-- Bail généré dynamiquement à partir des fiches bailleur, bien, logement et locataire. Il reprend les rubriques utiles du modèle fourni et affiche les renseignements restant à compléter.
-- États des lieux remplis par le propriétaire avec les sections et éléments détaillés du modèle transmis. Le constat de sortie compare les éléments et compteurs avec l'entrée. Photos prises depuis le téléphone ou ajoutées depuis la galerie, signatures tracées au doigt ou à la souris, finalisation, impression et enregistrement PDF par le navigateur.
-- Cloche de notifications dans l'application : loyers à recevoir ou en retard pour le mois en cours, anciennes factures encore impayées, bail expiré ou à échéance, entrée non signée, sortie en brouillon, travaux urgents. Vue globale : occupation, encaissements, soldes, baux, travaux et historique des six derniers mois.
+- Parcours guidé **propriété → logement → locataire et bail → état d'entrée**. Un logement indiqué « Occupé » ouvre la saisie du locataire ; le bail se préremplit dès que son dossier est enregistré.
+- Bail généré dynamiquement à partir des fiches bailleur, bien, logement et locataire. Il reprend les **24 rubriques du modèle fourni**, corrige la double mention contradictoire du dépôt et signale les renseignements restant à compléter.
+- États des lieux remplis par le propriétaire avec les sections et éléments détaillés du modèle transmis, adaptés aux pièces réellement saisies. Le constat de sortie compare les éléments et compteurs avec l'entrée. Photos prises ou ajoutées **pendant la saisie du constat**, puis ajoutables depuis sa fiche ; signatures tracées au doigt ou à la souris, finalisation, impression et enregistrement PDF par le navigateur.
+- Cloche de notifications dans l'application : loyers à recevoir ou en retard pour le mois en cours, anciennes factures encore impayées, bail expiré ou à échéance, entrée non signée, sortie en brouillon, travaux urgents. Vue globale : occupation, encaissements, soldes, baux, travaux, diagrammes circulaires et historique des six derniers mois.
 - PWA avec icônes et lancement direct depuis l'écran d'accueil du téléphone.
 
 ## Mettre en ligne sur Netlify
@@ -48,6 +50,6 @@ Les notifications sont visibles dans l'application lorsqu'elle est ouverte ou ac
 
 ## Documents et limites
 
-Le bail reprend la structure et les informations des modèles transmis, sans recopier automatiquement leurs clauses juridiques contradictoires. Les renseignements des fiches sont injectés à chaque ouverture du document ; modifiez la fiche concernée pour mettre à jour le bail. Relisez-le et adaptez les conditions et obligations applicables avant signature. La signature manuscrite tracée dans l'application est conservée avec le constat et apparaît à l'impression ; le produit ne fournit ni horodatage qualifié, ni vérification d'identité, ni service de signature électronique certifiée. L'impression du navigateur permet aussi d'enregistrer un PDF.
+Le bail reprend les 24 intitulés et la logique du modèle transmis. Son texte est reformulé pour éviter de recopier ses clauses contradictoires ou ses informations personnelles ; aucune conformité juridique n'est certifiée. Les renseignements des fiches sont injectés à chaque ouverture du document ; modifiez la fiche concernée pour mettre à jour le bail. Relisez-le et adaptez les conditions et obligations applicables avant signature. La signature manuscrite tracée dans l'application est conservée avec le constat et apparaît à l'impression ; le produit ne fournit ni horodatage qualifié, ni vérification d'identité, ni service de signature électronique certifiée. L'impression du navigateur permet aussi d'enregistrer un PDF.
 
 Les photos sont stockées dans Netlify Blobs (JPEG, PNG ou WebP, 3 Mo maximum par fichier) et servies uniquement après vérification du compte et du dossier. Les autres données sont dans un document JSON par compte dans Netlify Database, avec contrôle de révision. Les exports de sauvegarde intègrent les images dans le fichier JSON, qui peut donc devenir volumineux. Cette architecture convient à un portefeuille de taille modérée. Gardez des exports réguliers de vos dossiers.

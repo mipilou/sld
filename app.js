@@ -1,5 +1,5 @@
 import { getUser, login, signup, logout, handleAuthCallback, requestPasswordRecovery, acceptInvite, updateUser, getSettings } from "@netlify/identity";
-import { inspectionItems, leaseHTML, inspectionHTML } from "./document-templates.js";
+import { inspectionItemsForUnit, roomTypes, roomEquipment, roomSummary, leaseHTML, inspectionHTML } from "./document-templates.js";
 
 const $ = (selector) => document.querySelector(selector);
 const h = (value = "") => String(value ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
@@ -30,7 +30,8 @@ const expected = () => activeUnits().reduce((sum,u) => sum + Number(u.rent || 0)
 const collected = () => state.payments.filter(p => p.month === monthKey()).reduce((sum,p) => sum + Number(p.amount || 0),0);
 function portfolioSnapshot() {
   const liveUnits=state.units.filter(u=>!property(u.propertyId)?.archived);
-  const occupied=liveUnits.filter(u=>u.status==="occupied"&&u.tenantId);
+  const occupied=liveUnits.filter(u=>u.status==="occupied");
+  const missingTenant=occupied.filter(u=>!u.tenantId);
   const month=monthKey(), todayDate=today(), limit=new Date(`${todayDate}T12:00:00`);
   limit.setDate(limit.getDate()+90);
   const endLimit=limit.toLocaleDateString("sv-SE");
@@ -42,7 +43,7 @@ function portfolioSnapshot() {
   const missingEntry=state.tenants.filter(t=>!t.end&&!state.inspections.some(i=>i.tenantId===t.id&&i.type==="Entrée"&&i.finalizedAt));
   const monthPayments=state.payments.filter(p=>p.month===month);
   const byMethod=Object.entries(monthPayments.reduce((out,p)=>{const key=p.method||"Non renseigné";out[key]=(out[key]||0)+Number(p.amount||0);return out;},{})).sort((a,b)=>b[1]-a[1]);
-  return {liveUnits,occupied,due,remaining,pastDue,leases,missingEntry,byMethod,received:monthPayments.reduce((n,p)=>n+Number(p.amount||0),0),expected:due.reduce((n,x)=>n+x.rent,0)};
+  return {liveUnits,occupied,missingTenant,due,remaining,pastDue,leases,missingEntry,byMethod,received:monthPayments.reduce((n,p)=>n+Number(p.amount||0),0),expected:due.reduce((n,x)=>n+x.rent,0)};
 }
 const badge = (value) => `<span class="status ${/payé|occupé|terminé|signé|actif/i.test(value)?"good":/retard|impayé|urgent/i.test(value)?"bad":/partiel|travaux|cours|signalé|brouillon|à payer/i.test(value)?"warn":"info"}">${h(value)}</span>`;
 const linked = (kind, key, label) => `<button class="link-button" type="button" data-open="${kind}" data-id="${h(key)}">${h(label || "—")}</button>`;
@@ -166,7 +167,7 @@ function render() {
 }
 function updateChip() { const name = state.settings.ownerName || user?.email?.split("@")[0] || "Compte"; $("#ownerChip").innerHTML = `<span>${h(name.split(/\s+/).map(w => w[0]).join("").slice(0,2).toUpperCase())}</span><div><strong>${h(name)}</strong><small>${h(user?.email || "")}</small></div>`; }
 function notifications() {
-  const todayDate=today(), {due,pastDue,leases,missingEntry}=portfolioSnapshot(), alerts=[];
+  const todayDate=today(), {due,pastDue,leases,missingEntry,missingTenant}=portfolioSnapshot(), alerts=[];
   const soon=new Date(`${todayDate}T12:00:00`);soon.setDate(soon.getDate()+7);
   const soonDate=soon.toLocaleDateString("sv-SE");
   const leaseSoon=new Date(`${todayDate}T12:00:00`);leaseSoon.setDate(leaseSoon.getDate()+30);
@@ -179,6 +180,7 @@ function notifications() {
     else if(dueDate<=soonDate)alerts.push({kind:"Loyer à venir",message:`${x.t.name} · échéance le ${dateFr(dueDate)} (${money(balance)})`,view:"tenants",id:x.t.id});
   }
   for(const invoice of pastDue)alerts.push({kind:"Loyer antérieur impayé",message:`${tenant(invoice.tenantId)?.name||"Locataire"} · ${invoice.month} · ${money(invoice.balance)} restant`,view:"tenants",id:invoice.tenantId});
+  for(const u of missingTenant)alerts.push({kind:"Bail à créer",message:`${u.name} · logement indiqué occupé sans dossier locataire`,view:"units",id:u.id});
   for(const t of leases.filter(t=>t.leaseEnd<=leaseSoonDate))alerts.push({kind:t.leaseEnd<todayDate?"Bail arrivé à échéance":"Bail à échéance",message:`${t.name} · fin prévue le ${dateFr(t.leaseEnd)}`,view:"tenants",id:t.id});
   for(const t of missingEntry.filter(t=>t.start<=todayDate))alerts.push({kind:"Constat d’entrée à finaliser",message:`${t.name} · état d’entrée non signé`,view:"tenants",id:t.id});
   for(const i of state.inspections.filter(i=>i.type==="Sortie"&&!i.finalizedAt))alerts.push({kind:"Sortie à finaliser",message:`${tenant(i.tenantId)?.name||"Locataire"} · constat en brouillon`,view:"inspections",id:i.id});
@@ -194,13 +196,13 @@ function renderNotifications() {
 }
 function table(headers, rows) { return `<div class="card table-card"><div class="toolbar"><div class="search"><span>⌕</span><input id="searchInput" aria-label="Rechercher" placeholder="Rechercher dans la liste"></div><span class="card-sub">${rows.length} élément(s)</span></div><div class="table-wrap"><table><thead><tr>${headers.map(x=>`<th>${h(x)}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr data-search="${h(r.search)}">${r.cells.map(x=>`<td>${x}</td>`).join("")}</tr>`).join("")||`<tr><td class="empty" colspan="${headers.length}">Aucune donnée pour le moment.</td></tr>`}</tbody></table></div></div>`; }
 function dashboard() {
-  const {liveUnits,occupied,expected:due,received,remaining:late,leases,missingEntry}=portfolioSnapshot();
+  const {liveUnits,occupied,missingTenant,expected:due,received,remaining:late,leases,missingEntry}=portfolioSnapshot();
   return shell("Votre patrimoine",`Situation au ${dateFr(today())}`,`<button class="btn primary" data-view="properties">+ Ajouter une propriété</button>`,`<div class="kpi-grid">
     <div class="kpi"><p>Logements occupés</p><strong>${occupied.length}/${liveUnits.length}</strong><small>${liveUnits.length?Math.round(occupied.length/liveUnits.length*100):0}% d'occupation</small></div>
     <div class="kpi"><p>Encaissements du mois</p><strong>${money(received)}</strong><small>Sur ${money(due)} attendus</small></div>
     <div class="kpi danger"><p>Reste à percevoir</p><strong>${money(late.reduce((n,x)=>n+x.balance,0))}</strong><small>${late.length} dossier(s) à suivre</small></div>
     <div class="kpi warning"><p>Travaux ouverts</p><strong>${state.maintenance.filter(m=>m.status!=="Terminé").length}</strong></div>
-  </div><div class="grid-2"><div class="card"><h3>Locataires et loyers du mois</h3>${late.length?late.map(x=>`<div class="quick-row">${linked("tenants",x.t?.id,x.t?.name)}<span>${money(x.balance)} à percevoir</span></div>`).join(""):`<p class="muted">${occupied.length?"Aucun solde à percevoir.":"Ajoutez un logement et un locataire pour commencer."}</p>`}</div><div class="card"><h3>Points à suivre</h3><p>${leases.length} bail(s) expiré(s) ou à échéance sous 90 jours</p><p>${missingEntry.length} état(s) d'entrée non signé(s)</p><p>${state.inspections.filter(i=>!i.finalizedAt).length} constat(s) en brouillon</p><div class="quick-actions"><button class="btn secondary" data-view="reports">Ouvrir la vue globale</button><button class="btn secondary" data-action="payment-add">+ Paiement</button></div></div></div>`);
+  </div><div class="grid-2"><div class="card"><h3>Locataires et loyers du mois</h3>${late.length?late.map(x=>`<div class="quick-row">${linked("tenants",x.t?.id,x.t?.name)}<span>${money(x.balance)} à percevoir</span></div>`).join(""):`<p class="muted">${occupied.length?"Aucun solde à percevoir.":"Ajoutez un logement et un locataire pour commencer."}</p>`}</div><div class="card"><h3>Points à suivre</h3><p>${leases.length} bail(s) expiré(s) ou à échéance sous 90 jours</p><p>${missingTenant.length} logement(s) indiqué(s) occupé(s) sans bail</p><p>${missingEntry.length} état(s) d'entrée non signé(s)</p><p>${state.inspections.filter(i=>!i.finalizedAt).length} constat(s) en brouillon</p><div class="quick-actions"><button class="btn secondary" data-view="reports">Ouvrir la vue globale</button><button class="btn secondary" data-action="payment-add">+ Paiement</button></div></div></div>`);
 }
 function properties() { const list=state.properties.filter(p=>!p.archived||showArchived);return shell("Propriétés","Vos biens immobiliers et leurs logements.",`<button class="btn primary" data-action="property-add">+ Propriété</button>${state.properties.some(p=>p.archived)?`<button class="btn secondary" data-action="property-archives">${showArchived?"Masquer les archives":"Voir les archives"}</button>`:""}`,list.length?`<div class="property-grid">${list.map(p=>{const units=state.units.filter(u=>u.propertyId===p.id),occ=units.filter(u=>u.status==="occupied");return `<article class="property-card"><div class="property-cover"><span>${h(p.type)} ${p.archived?"· Archivé":""}</span>${badge(`${occ.length}/${units.length} occupés`)}</div><div class="property-card-body"><h3>${linked("properties",p.id,p.name)}</h3><p>📍 ${h(p.address||p.district||state.settings.city)}</p><div class="property-stats"><div><strong>${units.length}</strong><span>Logements</span></div><div><strong>${occ.length}</strong><span>Occupés</span></div><div><strong>${units.length-occ.length}</strong><span>Non occupés</span></div></div><p class="card-amount">${money(occ.reduce((n,u)=>n+Number(u.rent),0))} / mois</p>${actions("properties",p.id,!p.archived)}${p.archived?`<button class="btn small secondary" data-action="property-restore" data-id="${h(p.id)}">Restaurer</button>`:""}</div></article>`}).join("")}</div>`:empty("Aucune propriété enregistrée")); }
 function units() { return shell("Logements","Cliquez sur un nom pour ouvrir le dossier.",`<button class="btn primary" data-action="unit-add">+ Logement</button>`,table(["Logement","Propriété","Type","Loyer","Statut","Locataire",""],state.units.filter(u=>!property(u.propertyId)?.archived).map(u=>({search:`${u.name} ${property(u.propertyId)?.name} ${tenant(u.tenantId)?.name}`,cells:[linked("units",u.id,u.name),linked("properties",u.propertyId,property(u.propertyId)?.name),h(u.type),money(u.rent),badge(u.status==="occupied"?"Occupé":u.status==="works"?"En travaux":"Vacant"),u.tenantId?linked("tenants",u.tenantId,tenant(u.tenantId)?.name):"—",actions("units",u.id)]})))); }
@@ -210,6 +212,13 @@ function payments() { return shell("Paiements","Historique des règlements avec 
 function invoices() { return shell("Factures mensuelles","Émettez une facture par logement occupé et par mois.",`<button class="btn primary" data-action="invoice-run">Émettre ce mois</button>`,table(["N°","Locataire","Logement","Période","Montant","Statut",""],state.invoices.map(i=>({search:`${i.number} ${tenant(i.tenantId)?.name}`,cells:[h(i.number),linked("tenants",i.tenantId,tenant(i.tenantId)?.name),linked("units",i.unitId,unit(i.unitId)?.name),h(i.month),money(i.amount),badge(paid(i.tenantId,i.month)>=i.amount?"Payée":"À payer"),`<button class="btn small secondary" data-action="invoice-print" data-id="${h(i.id)}">Imprimer</button>`]})))); }
 function inspections() { return shell("États des lieux","Constats d'entrée et de sortie avec photos et signatures.",`<button class="btn primary" data-action="inspection-add" data-type="Entrée">+ Entrée</button><button class="btn secondary" data-action="inspection-add" data-type="Sortie">+ Sortie</button>`,table(["Date","Type","Locataire","Logement","Statut",""],state.inspections.map(i=>({search:`${tenant(i.tenantId)?.name} ${unit(i.unitId)?.name} ${i.type}`,cells:[dateFr(i.date),h(i.type),linked("tenants",i.tenantId,tenant(i.tenantId)?.name),linked("units",i.unitId,unit(i.unitId)?.name),badge(i.finalizedAt?"Signé":"Brouillon"),`<button class="btn small secondary" data-open="inspections" data-id="${h(i.id)}">Ouvrir</button>`]})))); }
 function maintenance() { return shell("Travaux","Incidents, interventions et dépenses.",`<button class="btn primary" data-action="maintenance-add">+ Intervention</button>`,table(["Intervention","Logement","Priorité","Coût","Statut",""],state.maintenance.map(m=>({search:`${m.title} ${unit(m.unitId)?.name}`,cells:[h(m.title),linked("units",m.unitId,unit(m.unitId)?.name),badge(m.priority),money(m.cost),badge(m.status),actions("maintenance",m.id)]})))); }
+function donut(title,parts,center,format=value=>String(value)) {
+  const colors=["#176a61","#e9b949","#739ca8","#b76a5b","#8b77a0","#6d8a50"];
+  const values=parts.map(([label,value])=>[label,Math.max(0,Number(value)||0)]),total=values.reduce((n,[,value])=>n+value,0);
+  let start=0;const segments=values.map(([,value],index)=>({value,index})).filter(x=>x.value>0).map(({value,index})=>{const end=start+value/total*100;const slice=`${colors[index%colors.length]} ${start.toFixed(3)}% ${end.toFixed(3)}%`;start=end;return slice;});
+  const background=total?`conic-gradient(${segments.join(",")})`:"#e9efee";
+  return `<div class="card chart-card"><h3>${h(title)}</h3><div class="donut-layout"><div class="donut" role="img" aria-label="${h(title)} : ${h(values.map(([label,value])=>`${label} ${format(value)}`).join(", "))}" style="background:${background}"><span>${h(total?center:"Aucune donnée")}</span></div><div class="donut-legend">${values.map(([label,value],index)=>`<div><i style="background:${colors[index%colors.length]}"></i><span>${h(label)}</span><strong>${h(format(value))}</strong></div>`).join("")}</div></div></div>`;
+}
 function reports() {
   const snap=portfolioSnapshot(),cost=state.maintenance.filter(m=>m.date?.startsWith(monthKey())).reduce((n,m)=>n+Number(m.cost||0),0);
   const openWorks=state.maintenance.filter(m=>m.status!=="Terminé"), pending=state.inspections.filter(i=>!i.finalizedAt);
@@ -218,13 +227,16 @@ function reports() {
   const max=Math.max(...history.map(x=>x.amount),1);
   return shell("Vue globale",`Données réelles au ${dateFr(today())} · loyers du mois ${monthKey()}.`,`<button class="btn secondary" data-action="report-print">Imprimer</button>`,
   `<div class="report-grid">
-    <div class="report-tile"><span>Occupation</span><strong>${snap.occupied.length} / ${snap.liveUnits.length}</strong><span>${snap.liveUnits.length?Math.round(snap.occupied.length/snap.liveUnits.length*100):0}% occupés · ${snap.liveUnits.filter(u=>u.status==="vacant").length} vacants · ${snap.liveUnits.filter(u=>u.status==="works").length} en travaux</span></div>
+    <div class="report-tile"><span>Occupation</span><strong>${snap.occupied.length} / ${snap.liveUnits.length}</strong><span>${snap.liveUnits.length?Math.round(snap.occupied.length/snap.liveUnits.length*100):0}% occupés · ${snap.liveUnits.filter(u=>u.status==="vacant").length} vacants · ${snap.liveUnits.filter(u=>u.status==="works").length} en travaux · ${snap.missingTenant.length} bail(s) à créer</span></div>
     <div class="report-tile"><span>Loyers attendus / encaissés</span><strong>${money(snap.expected)}</strong><span>${money(snap.received)} encaissés ce mois</span></div>
     <div class="report-tile"><span>Reste à percevoir</span><strong>${money(snap.remaining.reduce((n,x)=>n+x.balance,0))}</strong><span>${snap.remaining.length} dossier(s) ce mois · ${money(snap.pastDue.reduce((n,x)=>n+x.balance,0))} d'anciennes factures impayées</span></div>
     <div class="report-tile"><span>Taux de recouvrement</span><strong>${snap.expected?Math.round(Math.min(snap.received/snap.expected,1)*100):0}%</strong><span>${snap.expected?"Encaissements / loyers attendus":"Aucun loyer attendu ce mois"}</span></div>
     <div class="report-tile"><span>Baux à échéance sous 90 jours</span><strong>${snap.leases.length}</strong><span>Y compris les échéances déjà dépassées</span></div>
     <div class="report-tile"><span>Suivi opérationnel</span><strong>${openWorks.length} travaux</strong><span>${pending.length} constat(s) brouillon · ${snap.missingEntry.length} entrée(s) non signée(s)</span></div>
-  </div><div class="grid-2 spaced"><div class="card"><h3>Encaissements des six derniers mois</h3><div class="bar-chart">${history.map(x=>`<div class="bar-wrap" title="${h(x.key)} : ${money(x.amount)}"><span>${money(x.amount)}</span><div class="bar" style="height:${Math.max(4,Math.round(x.amount/max*145))}px"></div><span>${h(x.key.slice(5))}</span></div>`).join("")}</div></div>
+  </div><div class="chart-grid spaced">${donut("Statut des logements",[["Occupés",snap.occupied.length],["Vacants",snap.liveUnits.filter(u=>u.status==="vacant").length],["En travaux",snap.liveUnits.filter(u=>u.status==="works").length]],`${snap.liveUnits.length} logements`)}
+  ${donut("Modes d'encaissement du mois",snap.byMethod,"Paiements",money)}
+  ${donut("États des lieux",[["Signés",state.inspections.length-pending.length],["Brouillons",pending.length]],`${state.inspections.length} constats`)}</div>
+  <div class="grid-2 spaced"><div class="card"><h3>Encaissements des six derniers mois</h3><div class="bar-chart">${history.map(x=>`<div class="bar-wrap" title="${h(x.key)} : ${money(x.amount)}"><span>${money(x.amount)}</span><div class="bar" style="height:${Math.max(4,Math.round(x.amount/max*145))}px"></div><span>${h(x.key.slice(5))}</span></div>`).join("")}</div></div>
   <div class="card"><h3>Modes d'encaissement · mois courant</h3>${snap.byMethod.length?snap.byMethod.map(([method,amount])=>`<div class="quick-row"><span>${h(method)}</span><strong>${money(amount)}</strong></div>`).join(""):'<p class="muted">Aucun paiement enregistré ce mois.</p>'}<p class="muted">Travaux enregistrés ce mois : ${money(cost)}.</p></div></div>
   <div class="grid-2 spaced"><div class="card"><h3>Soldes à percevoir</h3>${snap.remaining.length?snap.remaining.map(x=>`<div class="quick-row">${linked("tenants",x.t.id,x.t.name)}<strong>${money(x.balance)} · ce mois</strong></div>`).join(""):'<p class="muted">Aucun solde connu ce mois.</p>'}${snap.pastDue.map(x=>`<div class="quick-row">${linked("tenants",x.tenantId,tenant(x.tenantId)?.name)}<strong>${money(x.balance)} · ${h(x.month)}</strong></div>`).join("")}</div>
   <div class="card"><h3>Échéances des baux</h3>${snap.leases.length?snap.leases.map(t=>`<div class="quick-row">${linked("tenants",t.id,t.name)}<span>${dateFr(t.leaseEnd)}</span></div>`).join(""):'<p class="muted">Aucune échéance connue sous 90 jours.</p>'}</div></div>
@@ -249,7 +261,7 @@ function propertyDetail(p) {
 function unitDetail(u) {
   if (!u) return empty("Logement introuvable");
   const t=tenant(u.tenantId), history=state.tenants.filter(x=>x.unitId===u.id);
-  return shell(u.name,`${property(u.propertyId)?.name||"Propriété"} · ${money(u.rent)} / mois`,`${back("units")}<button class="btn secondary" data-action="edit" data-kind="units" data-id="${h(u.id)}">Modifier</button>`,`<div class="detail-grid"><div class="card"><h3>Logement</h3><p>Propriété : ${linked("properties",u.propertyId,property(u.propertyId)?.name)}</p><p>Type : ${h(u.type)}</p><p>Loyer : ${money(u.rent)} · Charges : ${money(u.charges)}</p><p>Statut : ${badge(u.status==="occupied"?"Occupé":u.status==="works"?"En travaux":"Vacant")}</p></div><div class="card"><h3>Occupation</h3>${t?`<p>Locataire actuel : ${linked("tenants",t.id,t.name)}</p><p>Entrée : ${dateFr(t.start)}</p>`:`<p class="muted">Aucun locataire actuel.</p><button class="btn primary" data-action="tenant-add" data-unit="${h(u.id)}">Ajouter un locataire</button>`}</div></div><div class="card spaced"><h3>Historique des occupants</h3>${history.length?history.map(x=>`<div class="quick-row">${linked("tenants",x.id,x.name)}<span>${dateFr(x.start)} → ${dateFr(x.end)}</span></div>`).join(""):`<p class="muted">Aucun occupant enregistré.</p>`}</div>`);
+  return shell(u.name,`${property(u.propertyId)?.name||"Propriété"} · ${money(u.rent)} / mois`,`${back("units")}<button class="btn secondary" data-action="edit" data-kind="units" data-id="${h(u.id)}">Modifier</button>`,`<div class="workflow"><span class="done">1 · Logement créé</span><span class="${t?"done":"current"}">2 · Locataire et bail</span><span class="${t?"current":""}">3 · État des lieux d'entrée</span></div><div class="detail-grid"><div class="card"><h3>Logement</h3><p>Propriété : ${linked("properties",u.propertyId,property(u.propertyId)?.name)}</p><p>Type : ${h(u.type)}</p><p>Loyer : ${money(u.rent)} · Charges : ${money(u.charges)}</p><p>Statut : ${badge(u.status==="occupied"?"Occupé":u.status==="works"?"En travaux":"Vacant")}</p><p><strong>Composition :</strong> ${h(u.description||"À renseigner")}</p></div><div class="card"><h3>${t?"Bail en cours":"Étape suivante · créer le bail"}</h3>${t?`<p>Locataire : ${linked("tenants",t.id,t.name)}</p><p>Entrée : ${dateFr(t.start)}</p><button class="btn primary" data-action="lease-print" data-id="${h(t.id)}">Voir le contrat prérempli</button>`:`<p class="muted">Saisissez l'identité du locataire et les dates. Le contrat reprendra automatiquement la description, l'adresse et le loyer de ce logement.</p><button class="btn primary" data-action="tenant-add" data-unit="${h(u.id)}">Continuer : locataire et bail →</button>`}</div></div><div class="card spaced"><h3>Historique des occupants</h3>${history.length?history.map(x=>`<div class="quick-row">${linked("tenants",x.id,x.name)}<span>${dateFr(x.start)} → ${dateFr(x.end)}</span></div>`).join(""):`<p class="muted">Aucun occupant enregistré.</p>`}</div>`);
 }
 function tenantDetail(t) {
   if (!t) return empty("Locataire introuvable");
@@ -284,18 +296,39 @@ function addProperty(existing) {
   openModal(existing?"Modifier la propriété":"Ajouter une propriété",fields([
     {name:"name",label:"Nom de la propriété",required:true},{name:"district",label:"Quartier",required:true},
     {name:"address",label:"Adresse complète",full:true},{name:"cadastral",label:"Parcelle / référence cadastrale"},{name:"type",label:"Type",type:"select",options:choices(["Studio","Appartement","Immeuble","Villa","Maison","Local commercial","Autre"])}
-  ],existing),data=>{ if(existing)Object.assign(existing,data);else state.properties.push({id:id("p"),...data});persist(); });
+  ],existing),data=>{ const record=existing||{id:id("p")};Object.assign(record,data);if(!existing)state.properties.push(record);persist();if(!existing)navigate("properties",record.id); });
+}
+function equipmentChoices(type,chosen=[]) {
+  return (roomEquipment[type]||[]).map(item=>`<label class="equipment-option"><input type="checkbox" value="${h(item)}" ${chosen.includes(item)?"checked":""}>${h(item)}</label>`).join("");
+}
+function roomEditor(room={}) {
+  const type=room.type||"";
+  return `<div class="room-editor"><div class="room-main"><select class="room-type" aria-label="Type de pièce" required><option value="">Choisir la pièce</option>${roomTypes.map(value=>`<option value="${h(value)}" ${value===type?"selected":""}>${h(value)}</option>`).join("")}</select><input class="room-label" aria-label="Nom de la pièce" placeholder="Nom facultatif : Chambre 2…" value="${h(room.label||"")}"><button type="button" class="btn small danger room-remove" aria-label="Retirer cette pièce">Retirer</button></div><div class="room-wc" ${type==="Salle d’eau"?"":"hidden"}><label>W.C. dans cette salle d’eau ?</label><select class="room-toilet"><option value="">À préciser</option><option value="integrated" ${room.toilet==="integrated"?"selected":""}>Oui, W.C. intégré</option><option value="none" ${room.toilet==="none"?"selected":""}>Non, W.C. séparé ou absent</option></select></div><div class="room-equipments"><strong>Équipements présents</strong><div class="equipment-choice">${equipmentChoices(type,room.equipment||[])}</div></div><input class="room-extra" aria-label="Autres équipements" placeholder="Autres équipements ou précision" value="${h(room.extra||"")}"></div>`;
 }
 function addUnit(existing, propertyId) {
   if (!existing && !state.properties.some(p=>!p.archived)) return toast("Ajoutez d'abord une propriété active.");
-  openModal(existing?"Modifier le logement":"Ajouter un logement",fields([
+  const initial={...(existing||{propertyId,status:"vacant"}),descriptionNotes:existing?.descriptionNotes??(existing?.rooms?.length?"":existing?.description||"")};
+  const html=fields([
     {name:"name",label:"Nom ou référence",required:true},{name:"propertyId",label:"Propriété",type:"select",options:option(state.properties.filter(p=>!p.archived||p.id===existing?.propertyId),p=>p.name),required:true},
     {name:"type",label:"Type",type:"select",options:choices(["Studio","Appartement","Villa","Boutique","Bureau","Autre"])},
-    {name:"description",label:"Composition du logement (pièces, équipements)",type:"textarea",full:true},
     {name:"locationDetail",label:"Immeuble, étage, porte ou précision d'accès",full:true},
+    {name:"sharedEquipment",label:"Équipements communs / règlement intérieur",type:"textarea",full:true},
     {name:"rent",label:"Loyer mensuel (FCFA)",type:"number",min:1,required:true},{name:"charges",label:"Charges mensuelles (FCFA)",type:"number"},
-    ...(existing?.tenantId?[]:[{name:"status",label:"Statut",type:"select",options:[{value:"vacant",label:"Vacant"},{value:"works",label:"En travaux"}]}])
-  ],existing||{propertyId,status:"vacant"}),data=>{ const values={...data,rent:Number(data.rent),charges:Number(data.charges||0)}; if(existing)Object.assign(existing,values);else state.units.push({id:id("u"),tenantId:null,...values});persist(); });
+    ...(existing?.tenantId?[]:[{name:"status",label:"Statut du logement",type:"select",options:[{value:"vacant",label:"Vacant"},{value:"occupied",label:"Occupé — créer le dossier locataire"},{value:"works",label:"En travaux"}]}]),
+    {name:"descriptionNotes",label:"Précisions complémentaires sur le logement",type:"textarea",full:true}
+  ],initial)+`<section class="room-composition"><div class="card-head"><div><h3>Composition et équipements</h3><p class="muted">Ajoutez autant de pièces du même type que nécessaire. Cochez uniquement les équipements présents.</p></div><button type="button" class="btn secondary" id="roomAdd">+ Pièce</button></div><div id="roomEditors">${(existing?.rooms||[]).map(roomEditor).join("")}</div></section>`;
+  openModal(existing?"Modifier le logement":"Ajouter un logement",html,data=>{
+    const rooms=[...$("#roomEditors").querySelectorAll(".room-editor")].map(card=>({type:card.querySelector(".room-type").value,label:card.querySelector(".room-label").value.trim(),toilet:card.querySelector(".room-toilet").value,equipment:[...card.querySelectorAll(".equipment-choice input:checked")].map(x=>x.value),extra:card.querySelector(".room-extra").value.trim()}));
+    if(rooms.some(room=>!room.type))throw Error("Choisissez un type pour chaque pièce ajoutée.");
+    if(rooms.some(room=>room.type==="Salle d’eau"&&!room.toilet))throw Error("Précisez si les W.C. sont dans chaque salle d’eau.");
+    const values={...data,rooms,description:roomSummary(rooms,data.descriptionNotes),rent:Number(data.rent),charges:Number(data.charges||0)};
+    const record=existing||{id:id("u"),tenantId:null};if(existing)Object.assign(existing,values);else{Object.assign(record,values);state.units.push(record);}
+    persist();navigate("units",record.id);
+    if(!existing&&record.status==="occupied")setTimeout(()=>addTenant(null,record.id),0);
+  });
+  $("#roomAdd").onclick=()=>$("#roomEditors").insertAdjacentHTML("beforeend",roomEditor());
+  $("#roomEditors").addEventListener("click",event=>{if(event.target.closest(".room-remove"))event.target.closest(".room-editor").remove();});
+  $("#roomEditors").addEventListener("change",event=>{if(!event.target.matches(".room-type"))return;const card=event.target.closest(".room-editor");card.querySelector(".equipment-choice").innerHTML=equipmentChoices(event.target.value);card.querySelector(".room-wc").hidden=event.target.value!=="Salle d’eau";card.querySelector(".room-toilet").value="";});
 }
 function addTenant(existing, unitId) {
   const available=state.units.filter(u=>(!u.tenantId || u.id===existing?.unitId) && (!property(u.propertyId)?.archived || u.id===existing?.unitId));
@@ -304,19 +337,25 @@ function addTenant(existing, unitId) {
     {name:"name",label:"Nom et prénom",required:true},{name:"phone",label:"Téléphone",required:true},
     {name:"email",label:"E-mail",type:"email"},{name:"identityNumber",label:"N° de pièce d'identité"},{name:"postalAddress",label:"Adresse et boîte postale",full:true},
     {name:"unitId",label:"Logement",type:"select",options:option(available,u=>`${u.name} · ${money(u.rent)}`),required:true},
-    {name:"start",label:"Date d'entrée",type:"date",required:true},{name:"leaseEnd",label:"Fin prévue du bail",type:"date"},
+    {name:"start",label:"Date d'entrée",type:"date",required:true},{name:"leaseEnd",label:"Fin prévue du bail",type:"date",required:true},
     {name:"deposit",label:"Dépôt de garantie (FCFA)",type:"number"},{name:"dueDay",label:"Jour d'échéance du loyer",type:"number",min:1},
     {name:"leasePaymentMethod",label:"Mode de règlement prévu",type:"select",options:[{value:"",label:"À convenir"},...choices(["Espèces","Virement bancaire","Airtel Money","Moov Money","Chèque","Autre"])]},
     {name:"purpose",label:"Usage",type:"select",options:choices(["Habitation","Professionnel","Commercial"])},
+    {name:"renewalMode",label:"Renouvellement",type:"select",options:[{value:"",label:"À définir"},...choices(["Reconduction automatique d’un an","Renouvellement par accord écrit","Sans reconduction automatique"])]},
+    {name:"noticeMonths",label:"Préavis convenu (mois)",type:"number",min:0},
+    {name:"rentReview",label:"Révision du loyer",type:"select",options:[{value:"",label:"À préciser"},...choices(["Selon accord écrit des parties","Tous les deux ans sous réserve des règles applicables","Sans révision prévue"])]},
+    {name:"feesResponsibility",label:"Frais d'enregistrement",type:"select",options:[{value:"",label:"À préciser"},...choices(["À la charge du preneur","À la charge du bailleur","Partagés entre les parties"])]},
+    {name:"preOccupancyWorks",label:"Travaux avant occupation (si prévus)",type:"textarea",full:true},
     {name:"leaseNotes",label:"Conditions particulières",type:"textarea",full:true}
   ],existing||{unitId,start:today(),dueDay:1,purpose:"Habitation"}),data=>{
     if(Number(data.dueDay)>31)throw Error("Le jour d'échéance doit être compris entre 1 et 31.");
+    if(data.leaseEnd&&data.leaseEnd<data.start)throw Error("La fin du bail doit être après la date d'entrée.");
     if(existing?.end && data.unitId!==existing.unitId)throw Error("Un dossier clôturé conserve son logement historique.");
     if(existing && existing.unitId!==data.unitId){const old=unit(existing.unitId);if(old?.tenantId===existing.id){old.tenantId=null;old.status="vacant";}}
     const record=existing||{id:id("t")};Object.assign(record,{...data,deposit:Number(data.deposit||0),dueDay:Number(data.dueDay||1)});
     if(!existing)state.tenants.push(record);
     if(!record.end){const assigned=unit(record.unitId);assigned.tenantId=record.id;assigned.status="occupied";}
-    persist();
+    persist();navigate("tenants",record.id);if(!existing)toast("Dossier créé : ouvrez le contrat de bail prérempli pour le relire.");
   });
 }
 function addPayment(existing, tenantId) {
@@ -352,7 +391,7 @@ function addInspection(tenantId, preferredType = "Entrée", existing = null) {
   const selectedTenant=existing?.tenantId||tenantId||active[0].id;
   const selectedType=existing?.type||preferredType;
   const baseline=state.inspections.find(i=>i.tenantId===selectedTenant&&i.type==="Entrée");
-  const inspected=existing?.items?.length ? existing.items : inspectionItems;
+  const inspected=existing?.items?.length ? existing.items : inspectionItemsForUnit(unit(tenant(selectedTenant)?.unitId));
   const html=fields([
     {name:"tenantId",label:"Locataire",type:"select",options:option(existing?[tenant(selectedTenant)]:active,t=>`${t.name} · ${unit(t.unitId)?.name||""}`),required:true},
     {name:"type",label:"Type",type:"select",options:choices([selectedType])},
@@ -365,7 +404,7 @@ function addInspection(tenantId, preferredType = "Entrée", existing = null) {
     {name:"keyDetails",label:"Détail des clés et équipements",type:"textarea",full:true},
     ...(selectedType==="Sortie"?[{name:"reservations",label:"Réserves, réparations et points à suivre",type:"textarea",full:true}]:[]),
     {name:"notes",label:"Observations générales",type:"textarea",full:true}
-  ],existing||{tenantId:selectedTenant,type:selectedType,date:today()})+`<p class="muted">${selectedType==="Sortie"?(baseline?`Comparaison avec l'état d'entrée du ${dateFr(baseline.date)}. Saisissez l'état constaté à la sortie.`:"Aucun état d'entrée enregistré : saisissez les constats de sortie sans comparaison."):"Sélectionnez l'état constaté pour chaque élément. Aucun état n'est présumé bon."}</p><div class="inspection-checklist">${inspected.map((item,n)=>{const previous=baseline?.items?.find(x=>x.section===item.section&&x.item===item.item);return `${n===0||item.section!==inspected[n-1].section?`<h3 class="inspection-section">${h(item.section||"Autres éléments")}</h3>`:""}<div class="inspection-line"><strong>${h(item.item)}</strong>${selectedType==="Sortie"?`<small>Entrée : ${h(previous?.state||"sans constat")}</small>`:""}<select name="condition_${n}" required><option value="">Choisir l'état</option>${["Bon","Moyen","Mauvais","Non applicable"].map(v=>`<option value="${v}" ${existing?.items?.[n]?.state===v?"selected":""}>${v}</option>`).join("")}</select><input name="note_${n}" value="${h(existing?.items?.[n]?.note||"")}" placeholder="Observation précise"></div>`}).join("")}</div>`;
+  ],existing||{tenantId:selectedTenant,type:selectedType,date:today()})+`<p class="muted">${selectedType==="Sortie"?(baseline?`Comparaison avec l'état d'entrée du ${dateFr(baseline.date)}. Saisissez l'état constaté à la sortie.`:"Aucun état d'entrée enregistré : saisissez les constats de sortie sans comparaison."):"Sélectionnez l'état constaté pour chaque élément. Aucun état n'est présumé bon."}</p><div class="inspection-checklist">${inspected.map((item,n)=>{const previous=baseline?.items?.find(x=>x.section===item.section&&x.item===item.item);return `${n===0||item.section!==inspected[n-1].section?`<h3 class="inspection-section">${h(item.section||"Autres éléments")}</h3>`:""}<div class="inspection-line"><strong>${h(item.item)}</strong>${selectedType==="Sortie"?`<small>Entrée : ${h(previous?.state||"sans constat")}</small>`:""}<select name="condition_${n}" required><option value="">Choisir l'état</option>${["Bon","Moyen","Mauvais","Non applicable"].map(v=>`<option value="${v}" ${existing?.items?.[n]?.state===v?"selected":""}>${v}</option>`).join("")}</select><input name="note_${n}" value="${h(existing?.items?.[n]?.note||"")}" placeholder="Observation précise"></div>`}).join("")}</div><div class="inspection-photo-choice"><h3>Photos du constat</h3><p class="muted">Vous pouvez les ajouter maintenant. Elles seront envoyées après l'enregistrement du constat.</p><label class="btn secondary file-label">Prendre une photo<input id="inspectionCamera" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden></label><label class="btn secondary file-label">Choisir plusieurs photos<input id="inspectionGallery" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden></label></div>`;
   openModal(existing?"Modifier l'état des lieux":"Nouvel état des lieux",html,async data=>{
     const t=tenant(data.tenantId);if(!t)throw Error("Locataire introuvable.");
     if(!existing&&state.inspections.some(i=>i.tenantId===t.id&&i.type===data.type))throw Error(`Un état des lieux de ${data.type.toLowerCase()} existe déjà pour ce locataire.`);
@@ -373,12 +412,15 @@ function addInspection(tenantId, preferredType = "Entrée", existing = null) {
     if(existing?.signatures?.landlord||existing?.signatures?.tenant) {
       if(!confirm("Modifier ce constat annulera les signatures déjà recueillies. Continuer ?"))return;
     }
+    const files=[...$("#inspectionCamera").files,...$("#inspectionGallery").files];
     const record=existing||{id:id("ins"),photos:[],signatures:{landlord:null,tenant:null},finalizedAt:null};
     Object.assign(record,{tenantId:t.id,unitId:t.unitId,type:data.type,date:data.date,time:data.time,electricity:data.electricity,water:data.water,keys:data.keys,badges:data.badges,keyDetails:data.keyDetails,reservations:data.reservations||"",notes:data.notes,
       items:inspected.map((item,n)=>({section:item.section||"Autres éléments",item:item.item,state:data[`condition_${n}`],note:data[`note_${n}`]}))});
     if(existing)record.signatures={landlord:null,tenant:null};else state.inspections.push(record);
     persist();navigate("inspections",record.id);
+    if(files.length)await attachPhotos(record,files);
   });
+  if(!existing)$("#field_tenantId").onchange=event=>{if(event.target.value!==selectedTenant)addInspection(event.target.value,selectedType);};
 }
 
 function closeTenant(key) {
@@ -407,7 +449,7 @@ function removeRecord(kind,key) {
       if(!confirm(`Archiver « ${record.name} » ? L'historique locatif restera accessible dans les dossiers.`))return;
       record.archived=true;selected=null;persist();return;
     }
-    if(!confirm(`Supprimer définitivement « ${record.name} » et ses ${unitsHere.length} logement(s) vacants ainsi que les interventions associées ?`))return;
+    if(!confirm(`Supprimer définitivement « ${record.name} » et ses ${unitsHere.length} logement(s) sans historique locatif ainsi que les interventions associées ?`))return;
     state.units=state.units.filter(u=>!ids.has(u.id));state.maintenance=state.maintenance.filter(m=>!ids.has(m.unitId));
     state[kind]=state[kind].filter(x=>x.id!==key);selected=null;persist();return;
   }
@@ -421,6 +463,10 @@ async function uploadPhotos(event) {
   const inspection=state.inspections.find(i=>i.id===selected);
   if(!inspection||inspection.finalizedAt)return;
   const files=[...event.target.files];if(!files.length)return;
+  await attachPhotos(inspection,files);
+}
+async function attachPhotos(inspection,files) {
+  if(!files.length)return;
   if(!await flush())return toast("Enregistrez d'abord l'état des lieux avant d'ajouter des photos.");
   for(const file of files){
     if(file.size>3_000_000 || !["image/jpeg","image/png","image/webp"].includes(file.type)){toast(`${file.name} : image JPEG, PNG ou WebP de 3 Mo maximum.`);continue;}
