@@ -1,4 +1,4 @@
-# GestiLoc Dbz — version 8
+# GestiLoc Dbz — version 9
 
 Application web installable (PWA) pour gérer un patrimoine locatif. Le compte démarre **sans bien, locataire, paiement ou document fictif**.
 
@@ -62,7 +62,7 @@ Les codes relient les lignes : propriété → logement → locataire → éché
 
 Les montants attendus se saisissent dans **Echeances** et chaque versement réel dans **Paiements**. Les statuts **Payé**, **Partiel**, **Impayé** sont calculés. Le **Statut attendu** facultatif permet de détecter une incohérence entre votre fichier et les montants reçus. Une erreur bloque tout l'import. L'aperçu doit être confirmé avant l'enregistrement.
 
-Format accepté : `.xlsx`, 5 Mo maximum et 2 000 lignes par feuille dans un import. Les dates utilisent AAAA-MM-JJ, les mois AAAA-MM et les montants sont des entiers en FCFA. Un changement de logement d'un locataire ou la modification d'une location clôturée se fait depuis sa fiche.
+Format accepté : `.xlsx`, 5 Mo maximum et 2 000 lignes par feuille dans un import. Dans **Echeances**, remplissez **Mois (MM/AAAA)** et **Date échéance (JJ/MM/AAAA)**. Excel peut aussi fournir de vraies cellules date dans ces deux colonnes ; elles sont converties en interne. Les anciens classeurs avec **Mois** au format AAAA-MM et **Date échéance** au format AAAA-MM-JJ restent acceptés. Dans les autres feuilles, les dates utilisent AAAA-MM-JJ et les mois AAAA-MM. Les montants sont des entiers en FCFA. Un changement de logement d'un locataire ou la modification d'une location clôturée se fait depuis sa fiche.
 
 ## Développement
 

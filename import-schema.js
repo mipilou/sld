@@ -3,7 +3,7 @@ export const importSchemas = [
   {sheet:"Proprietes",kind:"properties",label:"Propriétés",columns:["Code propriété","Nom","Type","Quartier","Adresse","Référence cadastrale","Couleur"],required:["Code propriété","Nom","Type","Quartier"]},
   {sheet:"Logements",kind:"units",label:"Logements",columns:["Code logement","Code propriété","Nom","Type","Loyer FCFA","Charges FCFA","Statut","Localisation","Description"],required:["Code logement","Code propriété","Nom","Type","Loyer FCFA","Statut"]},
   {sheet:"Locataires",kind:"tenants",label:"Locataires",columns:["Code locataire","Code logement","Nom","Téléphone","Email","Date entrée","Fin bail","Dépôt FCFA","Jour échéance","Pièce identité","Adresse","Conditions bail"],required:["Code locataire","Code logement","Nom","Téléphone","Date entrée","Fin bail"]},
-  {sheet:"Echeances",kind:"invoices",label:"Échéances de loyer",columns:["Code échéance","Code locataire","Mois","Montant dû FCFA","Date échéance","Statut attendu"],required:["Code échéance","Code locataire","Mois","Montant dû FCFA","Date échéance"]},
+  {sheet:"Echeances",kind:"invoices",label:"Échéances de loyer",columns:["Code échéance","Code locataire","Mois (MM/AAAA)","Montant dû FCFA","Date échéance (JJ/MM/AAAA)","Statut attendu"],required:["Code échéance","Code locataire","Mois (MM/AAAA)","Montant dû FCFA","Date échéance (JJ/MM/AAAA)"]},
   {sheet:"Paiements",kind:"payments",label:"Paiements reçus",columns:["Code paiement","Code locataire","Mois","Montant reçu FCFA","Date réception","Mode","Référence","Notes"],required:["Code paiement","Code locataire","Mois","Montant reçu FCFA","Date réception","Mode"]}
 ];
 export const importLists = {
@@ -31,11 +31,25 @@ export function prepareImport(sheets,source,makeId=()=>crypto.randomUUID()) {
     const n=typeof value==="number"?value:Number(str(value).replace(/[\s\u00a0]/g,"").replace(",","."));
     if(!str(value)||!Number.isSafeInteger(n)||n<min)fail(where,`montant entier requis, au moins ${min}`);return n;
   };
-  const date=(value,where)=>{
-    const s=value instanceof Date?value.toISOString().slice(0,10):str(value);
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(s)||!Number.isFinite(Date.parse(s))||new Date(s).toISOString().slice(0,10)!==s)fail(where,"date requise au format AAAA-MM-JJ");return s;
+  const validISODate=s=>/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s;
+  const date=(value,where,french=false)=>{
+    let s=value instanceof Date&&Number.isFinite(value.getTime())?value.toISOString().slice(0,10):str(value);
+    if(french&&/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.test(s)){
+      const [,day,month,year]=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      s=`${year}-${month.padStart(2,"0")}-${day.padStart(2,"0")}`;
+    }
+    if(!validISODate(s))fail(where,`date requise au format ${french?"JJ/MM/AAAA":"AAAA-MM-JJ"}`);
+    return s;
   };
-  const month=(value,where)=>{const s=str(value);if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(s))fail(where,"mois requis au format AAAA-MM");return s;};
+  const month=(value,where,french=false)=>{
+    let s=value instanceof Date&&Number.isFinite(value.getTime())?value.toISOString().slice(0,7):str(value);
+    if(french&&/^(\d{1,2})\/(\d{4})$/.test(s)){
+      const [,month,year]=s.match(/^(\d{1,2})\/(\d{4})$/);
+      s=`${year}-${month.padStart(2,"0")}`;
+    }
+    if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(s))fail(where,`mois requis au format ${french?"MM/AAAA":"AAAA-MM"}`);
+    return s;
+  };
   const resolve=(kind,value,where)=>{const matches=payload[kind].filter(x=>code(x)===str(value)||x.id===str(value));if(matches.length!==1)fail(where,"code lié introuvable ou ambigu");return matches[0];};
   const tenantSheet=sheets.find(s=>norm(s.sheet)==="locataires");
   const tenantHeaders=(tenantSheet?.data?.[0]||[]).map(norm);
@@ -47,7 +61,12 @@ export function prepareImport(sheets,source,makeId=()=>crypto.randomUUID()) {
     seenSheets.add(schema.sheet);
     const rows=candidates[0].data;
     if(!rows?.length)continue;
-    const headers=rows[0].map(norm),seen=new Set();
+    const headers=rows[0].map(value=>{
+      const label=norm(value);
+      if(schema.kind==="invoices"&&label==="mois")return norm("Mois (MM/AAAA)");
+      if(schema.kind==="invoices"&&label==="date echeance")return norm("Date échéance (JJ/MM/AAAA)");
+      return label;
+    }),seen=new Set();
     const missing=schema.required.filter(c=>!headers.includes(norm(c)));
     if(missing.length){errors.push(`${schema.sheet} : colonnes manquantes : ${missing.join(", ")}`);continue;}
     if(headers.filter(Boolean).length!==new Set(headers.filter(Boolean)).size){errors.push(`${schema.sheet} : en-têtes en double`);continue;}
@@ -89,13 +108,13 @@ export function prepareImport(sheets,source,makeId=()=>crypto.randomUUID()) {
           u.tenantId=record.id;u.status="occupied";
         }
         if(["payments","invoices"].includes(schema.kind)){
-          const t=resolve("tenants",get("Code locataire"),at),period=month(get("Mois"),at);
+          const t=resolve("tenants",get("Code locataire"),at),period=month(get(schema.kind==="invoices"?"Mois (MM/AAAA)":"Mois"),at,schema.kind==="invoices");
           if(existing&&existing.tenantId!==t.id)fail(at,"ce code existe pour un autre locataire");
           Object.assign(record,{tenantId:t.id,unitId:t.unitId,month:period});
           if(schema.kind==="payments")Object.assign(record,{amount:amount(get("Montant reçu FCFA"),at,1),date:date(get("Date réception"),at),method:choose(get("Mode"),importLists["Paiements:Mode"],at),reference:str(get("Référence")),notes:str(get("Notes"))});
           else {
             if(payload.invoices.some(i=>i.id!==record.id&&i.tenantId===t.id&&i.month===period))fail(at,"échéance déjà présente pour ce locataire et ce mois. Réutilisez son code");
-            const due=date(get("Date échéance"),at);
+            const due=date(get("Date échéance (JJ/MM/AAAA)"),at,true);
             Object.assign(record,{amount:amount(get("Montant dû FCFA"),at,1),dueDate:due,date:existing?.date||due,number:existing?.number||external});
             const expected=choose(get("Statut attendu"),importLists["Echeances:Statut attendu"],at,true);if(expected)statusChecks.push({id:record.id,expected,at});
           }
